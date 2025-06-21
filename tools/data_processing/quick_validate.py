@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """
 Quick Dataset Validation for AI-Scale
-Lightweight validation for integration with main application
+Lightweight validation for integration with main application.
+Now uses a central SQLite database for metadata.
 """
 
 import cv2
 from pathlib import Path
 from typing import Dict, List, Tuple
+import sqlite3
 
-def quick_validate_dataset(dataset_path: Path) -> Dict:
-    """Quick validation of dataset structure and basic quality"""
+def quick_validate_dataset(dataset_path: Path, db_path: Path) -> Dict:
+    """
+    Quick validation using the central database and filesystem checks.
+    
+    Args:
+        dataset_path: The root path of the raw image data (e.g., 'data/raw').
+        db_path: The path to the SQLite database file.
+    """
     
     result = {
         "valid": True,
@@ -20,60 +28,80 @@ def quick_validate_dataset(dataset_path: Path) -> Dict:
         "class_summary": {}
     }
     
-    if not dataset_path.exists():
+    if not db_path.exists():
         result["valid"] = False
-        result["issues"].append("Dataset path does not exist")
+        result["issues"].append(f"Database not found at '{db_path}'")
         return result
-    
-    # Check class directories
-    class_dirs = [d for d in dataset_path.iterdir() 
-                  if d.is_dir() and not d.name.startswith('.')]
-    
-    result["total_classes"] = len(class_dirs)
-    
-    if not class_dirs:
+
+    try:
+        con = sqlite3.connect(db_path)
+        cur = con.cursor()
+
+        # --- Database-driven Validation ---
+        # Get total images
+        cur.execute("SELECT COUNT(id) FROM captures")
+        result["total_images"] = cur.fetchone()[0]
+
+        # Get total size
+        cur.execute("SELECT SUM(file_size) FROM captures")
+        total_size_bytes = cur.fetchone()[0]
+        result["total_size_mb"] = (total_size_bytes / (1024 * 1024)) if total_size_bytes else 0
+
+        # Get class summaries
+        cur.execute("""
+            SELECT class_name, COUNT(id), SUM(file_size)
+            FROM captures
+            GROUP BY class_name
+        """)
+        db_class_summary = cur.fetchall()
+        result["total_classes"] = len(db_class_summary)
+
+        for class_name, count, size_bytes in db_class_summary:
+            class_info = {
+                "count": count,
+                "size_mb": (size_bytes / (1024 * 1024)) if size_bytes else 0,
+                "issues": []
+            }
+            if count < 10:
+                class_info["issues"].append(f"Low image count: {count}")
+            
+            result["class_summary"][class_name] = class_info
+
+        # --- Filesystem-based Sanity Checks ---
+        # Check for a few images to ensure they exist and are readable
+        cur.execute("SELECT filename, class_name FROM captures ORDER BY RANDOM() LIMIT 20")
+        sample_images = cur.fetchall()
+        
+        missing_files = []
+        for filename, class_name in sample_images:
+            img_path = dataset_path / class_name / filename
+            if not img_path.exists():
+                missing_files.append(f"{class_name}/{filename}")
+            else:
+                # Optional: check if image is loadable (can be slow)
+                # try:
+                #     img = cv2.imread(str(img_path))
+                #     if img is None:
+                #         result["class_summary"][class_name]["issues"].append(f"Cannot load: {filename}")
+                # except Exception:
+                #      result["class_summary"][class_name]["issues"].append(f"Read error: {filename}")
+                pass
+        
+        if missing_files:
+            issue_str = f"Found {len(missing_files)} missing image files (e.g., {missing_files[0]})"
+            result["issues"].append(issue_str)
+            result["valid"] = False
+
+        con.close()
+
+    except sqlite3.Error as e:
         result["valid"] = False
-        result["issues"].append("No class directories found")
+        result["issues"].append(f"Database error: {e}")
         return result
-    
-    for class_dir in class_dirs:
-        class_name = class_dir.name
-        image_files = list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.jpeg"))
-        
-        class_info = {
-            "count": len(image_files),
-            "size_mb": 0,
-            "issues": []
-        }
-        
-        if len(image_files) < 10:
-            class_info["issues"].append(f"Low image count: {len(image_files)}")
-        
-        for img_path in image_files:
-            try:
-                file_size = img_path.stat().st_size
-                class_info["size_mb"] += file_size / (1024 * 1024)
-                result["total_size_mb"] += file_size / (1024 * 1024)
-                
-                # Quick image validation
-                img = cv2.imread(str(img_path))
-                if img is None:
-                    class_info["issues"].append(f"Cannot load: {img_path.name}")
-                elif img.shape[0] < 50 or img.shape[1] < 50:
-                    class_info["issues"].append(f"Too small: {img_path.name}")
-                    
-            except Exception as e:
-                class_info["issues"].append(f"Error: {img_path.name}")
-        
-        result["total_images"] += class_info["count"]
-        result["class_summary"][class_name] = class_info
-        
-        if class_info["issues"]:
-            result["issues"].extend([f"{class_name}: {issue}" for issue in class_info["issues"]])
-    
-    # Overall validation
+
+    # --- Overall Validation Rules ---
     if result["total_images"] < 100:
-        result["issues"].append("Total images too low for training")
+        result["issues"].append("Total images may be too low for training")
     
     if result["total_classes"] < 3:
         result["issues"].append("Too few classes for meaningful training")
@@ -82,39 +110,6 @@ def quick_validate_dataset(dataset_path: Path) -> Dict:
         result["valid"] = False
     
     return result
-
-def get_dataset_stats(dataset_path: Path) -> Dict:
-    """Get basic dataset statistics"""
-    
-    stats = {
-        "classes": {},
-        "total_images": 0,
-        "total_size_mb": 0,
-        "avg_images_per_class": 0
-    }
-    
-    if not dataset_path.exists():
-        return stats
-    
-    class_dirs = [d for d in dataset_path.iterdir() 
-                  if d.is_dir() and not d.name.startswith('.')]
-    
-    for class_dir in class_dirs:
-        image_files = list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.jpeg"))
-        class_size = sum(f.stat().st_size for f in image_files) / (1024 * 1024)
-        
-        stats["classes"][class_dir.name] = {
-            "count": len(image_files),
-            "size_mb": class_size
-        }
-        
-        stats["total_images"] += len(image_files)
-        stats["total_size_mb"] += class_size
-    
-    if stats["classes"]:
-        stats["avg_images_per_class"] = stats["total_images"] / len(stats["classes"])
-    
-    return stats
 
 def print_quick_report(report: Dict):
     """Prints a user-friendly report from the validation results."""
@@ -152,9 +147,14 @@ def print_quick_report(report: Dict):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Quickly validate an AI-Scale dataset.")
+    parser = argparse.ArgumentParser(description="Quickly validate an AI-Scale dataset using its database.")
     parser.add_argument("dataset_path", type=Path, help="Path to the root of the dataset (e.g., data/raw).")
+    parser.add_argument("--db-path", type=Path, default="data/metadata.db", help="Path to the metadata SQLite database.")
     args = parser.parse_args()
 
-    validation_result = quick_validate_dataset(args.dataset_path)
+    if not args.db_path.exists():
+        print(f"Error: Database file not found at '{args.db_path}'")
+        exit(1)
+
+    validation_result = quick_validate_dataset(args.dataset_path, args.db_path)
     print_quick_report(validation_result) 

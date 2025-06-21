@@ -46,6 +46,11 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+data/metadata.db
+data/metadata.db-*
+
+# Config
+config.json
 
 # Models
 models/weights/*

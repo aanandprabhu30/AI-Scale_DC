@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-Scale Data Collector v2.0
+AI-Scale Data Collector v2.1
 Optimized for M2 MacBook Air with Arducam IMX219 USB Camera
 Production-ready tool for capturing produce images for AI training
 """
@@ -15,7 +15,11 @@ from pathlib import Path
 from datetime import datetime
 from collections import deque
 from dataclasses import dataclass, asdict
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
+
+from PySide6.QtGui import QPainter, QPen, QColor
+from PySide6.QtCore import QPoint, QPropertyAnimation
+from PySide6.QtWidgets import QSlider, QCheckBox, QScrollArea
 
 # Try PySide6 first (better macOS compatibility), fallback to PyQt6
 try:
@@ -24,7 +28,7 @@ try:
         QLabel, QPushButton, QComboBox, QMessageBox, QInputDialog, QGridLayout,
         QDialog, QDialogButtonBox, QStyleFactory, QTextEdit
     )
-    from PySide6.QtCore import Qt, QTimer, Signal as pyqtSignal, QThread, QSettings
+    from PySide6.QtCore import Qt, QTimer, Signal, QThread
     from PySide6.QtGui import QPixmap, QImage, QKeySequence, QShortcut, QAction
 
     # Add a dedicated function to check for Qt plugin paths
@@ -32,6 +36,8 @@ try:
     import logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+    import sqlite3
+
 
     def check_qt_plugins():
         """Helper function to diagnose Qt plugin issues."""
@@ -57,8 +63,12 @@ from tools.data_processing.quick_validate import quick_validate_dataset
 
 # Constants
 APP_NAME = "AI-Scale Data Collector"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.2.0"
 ORGANIZATION = "AI-Scale"
+CONFIG_FILE = "config.json"
+DATABASE_FILE = "data/metadata.db"
+MIN_DISK_SPACE_MB = 100
+
 
 # IMX219 sensor specifications
 IMX219_CONFIGS = {
@@ -89,9 +99,131 @@ class CaptureMetadata:
     camera_settings: dict
     session_id: str
     
+class DatabaseManager:
+    """Manages all interactions with the SQLite metadata database."""
+    def __init__(self, db_file: str):
+        self.db_path = Path(db_file)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._cursor = self._connection.cursor()
+        self._create_table()
+
+    def _create_table(self):
+        """Creates the captures table if it doesn't exist."""
+        self._cursor.execute("""
+            CREATE TABLE IF NOT EXISTS captures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL UNIQUE,
+                class_name TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                file_size INTEGER NOT NULL,
+                camera_settings TEXT,
+                session_id TEXT NOT NULL
+            )
+        """)
+        self._connection.commit()
+    
+    def add_capture(self, metadata: CaptureMetadata):
+        """Adds a new capture record to the database."""
+        settings_json = json.dumps(metadata.camera_settings)
+        try:
+            self._cursor.execute("""
+                INSERT INTO captures (filename, class_name, timestamp, width, height, file_size, camera_settings, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                metadata.filename,
+                metadata.class_name,
+                metadata.timestamp,
+                metadata.resolution[0],
+                metadata.resolution[1],
+                metadata.file_size,
+                settings_json,
+                metadata.session_id
+            ))
+            self._connection.commit()
+            logger.info(f"Added '{metadata.filename}' to database.")
+        except sqlite3.IntegrityError:
+            logger.warning(f"'{metadata.filename}' already exists in the database. Skipping.")
+        except Exception as e:
+            logger.error(f"Database Error: Could not add capture {metadata.filename}. Reason: {e}")
+            self._connection.rollback()
+
+    def get_class_counts(self) -> Dict[str, int]:
+        """Gets the count of images for each class."""
+        self._cursor.execute("SELECT class_name, COUNT(*) FROM captures GROUP BY class_name")
+        return dict(self._cursor.fetchall())
+
+    def get_total_captures(self) -> int:
+        """Gets the total number of captures in the database."""
+        self._cursor.execute("SELECT COUNT(id) FROM captures")
+        result = self._cursor.fetchone()
+        return result[0] if result else 0
+
+    def close(self):
+        """Closes the database connection."""
+        if self._connection:
+            self._connection.close()
+
+class ConfigManager:
+    """Manages loading and saving of application settings to a JSON file."""
+    def __init__(self, config_file: str):
+        self.config_path = Path(config_file)
+        self.defaults = {
+            "last_camera_index": 0,
+            "window_geometry": None,
+            "save_options": {
+                "create_preview": False,
+                "quality": 95
+            },
+            "camera_controls": {
+                "brightness": 0,
+                "contrast": 0,
+                "saturation": 0,
+                "exposure_comp": 0
+            }
+        }
+        self.config = self._load()
+
+    def _load(self) -> Dict[str, Any]:
+        """Loads config from JSON file, creating it with defaults if it doesn't exist."""
+        if not self.config_path.exists():
+            logger.info(f"'{self.config_path}' not found, creating with default settings.")
+            self.save(self.defaults)
+            return self.defaults
+        
+        try:
+            with open(self.config_path, 'r') as f:
+                config = json.load(f)
+                # Ensure all keys from defaults are present
+                for key, value in self.defaults.items():
+                    config.setdefault(key, value)
+                return config
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error loading '{self.config_path}': {e}. Using default settings.")
+            return self.defaults
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Gets a value from the config."""
+        return self.config.get(key, default)
+
+    def set(self, key: str, value: Any):
+        """Sets a value in the config."""
+        self.config[key] = value
+
+    def save(self, data: Optional[Dict[str, Any]] = None):
+        """Saves the current config to the JSON file."""
+        to_save = data if data is not None else self.config
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(to_save, f, indent=4)
+        except IOError as e:
+            logger.error(f"Failed to save config to '{self.config_path}': {e}")
+
 class SaveWorker(QThread):
     """Worker thread for saving images without blocking the UI"""
-    finished = pyqtSignal(bool, str, object) # success, message, metadata_tuple
+    finished = Signal(bool, str, object) # success, message, metadata_tuple
 
     def __init__(self, frame, class_path, filename, options, cam_info, session_id):
         super().__init__()
@@ -105,6 +237,14 @@ class SaveWorker(QThread):
     def run(self):
         """Perform the file I/O operations in the background"""
         try:
+            # --- Pre-emptive Disk Space Check ---
+            free_space_bytes = shutil.disk_usage(self.class_path.anchor).free
+            free_space_mb = free_space_bytes / (1024 * 1024)
+            
+            if free_space_mb < MIN_DISK_SPACE_MB:
+                raise IOError(f"Low disk space: {free_space_mb:.2f} MB remaining. "
+                              f"Need at least {MIN_DISK_SPACE_MB} MB.")
+
             filepath = self.class_path / self.filename
             
             # Save main image with error checking
@@ -136,15 +276,226 @@ class SaveWorker(QThread):
                     self.session_id
                 )
                 metadata = CaptureMetadata(*metadata_tuple)
-                meta_path = filepath.with_suffix('.json')
-                with open(meta_path, 'w') as f:
-                    json.dump(asdict(metadata), f, indent=2)
+                # No longer saving JSON file here, will be handled by main thread
 
             self.finished.emit(True, str(filepath), metadata)
 
         except Exception as e:
             self.finished.emit(False, str(e), None)
 
+
+class CameraControlsWidget(QWidget):
+    """Advanced camera controls for image quality adjustment"""
+    
+    settingsChanged = Signal(dict)
+    
+    def __init__(self, camera_thread):
+        super().__init__()
+        self.camera_thread = camera_thread
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QGridLayout(self)
+        layout.setSpacing(8)
+        
+        # Title
+        title = QLabel("<b>Camera Controls</b>")
+        layout.addWidget(title, 0, 0, 1, 3)
+        
+        # Brightness
+        layout.addWidget(QLabel("Brightness:"), 1, 0)
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(-100, 100)
+        self.brightness_slider.setValue(0)
+        self.brightness_slider.valueChanged.connect(self.update_controls)
+        self.brightness_value = QLabel("0")
+        layout.addWidget(self.brightness_slider, 1, 1)
+        layout.addWidget(self.brightness_value, 1, 2)
+        
+        # Contrast
+        layout.addWidget(QLabel("Contrast:"), 2, 0)
+        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contrast_slider.setRange(-100, 100)
+        self.contrast_slider.setValue(0)
+        self.contrast_slider.valueChanged.connect(self.update_controls)
+        self.contrast_value = QLabel("0")
+        layout.addWidget(self.contrast_slider, 2, 1)
+        layout.addWidget(self.contrast_value, 2, 2)
+        
+        # Saturation
+        layout.addWidget(QLabel("Saturation:"), 3, 0)
+        self.saturation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.saturation_slider.setRange(-100, 100)
+        self.saturation_slider.setValue(0)
+        self.saturation_slider.valueChanged.connect(self.update_controls)
+        self.saturation_value = QLabel("0")
+        layout.addWidget(self.saturation_slider, 3, 1)
+        layout.addWidget(self.saturation_value, 3, 2)
+
+        # --- White Balance (Hardware) ---
+        layout.addWidget(QLabel("<b>White Balance</b>"), 4, 0, 1, 3)
+        self.wb_auto_cb = QCheckBox("Auto")
+        self.wb_auto_cb.setChecked(True)
+        self.wb_auto_cb.stateChanged.connect(self.update_controls)
+        layout.addWidget(self.wb_auto_cb, 5, 0)
+
+        self.wb_temp_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wb_temp_slider.setRange(2000, 7500) # Kelvin scale
+        self.wb_temp_slider.setValue(4500)
+        self.wb_temp_slider.valueChanged.connect(self.update_controls)
+        self.wb_temp_value = QLabel("4500 K")
+        layout.addWidget(self.wb_temp_slider, 5, 1)
+        layout.addWidget(self.wb_temp_value, 5, 2)
+        
+        # Exposure (repurposed as software brightness boost)
+        layout.addWidget(QLabel("Exposure Comp:"), 6, 0)
+        self.exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        self.exposure_slider.setRange(-10, 10)
+        self.exposure_slider.setValue(0)
+        self.exposure_slider.valueChanged.connect(self.update_controls)
+        self.exposure_value = QLabel("0")
+        layout.addWidget(self.exposure_slider, 6, 1)
+        layout.addWidget(self.exposure_value, 6, 2)
+        
+        # Auto modes
+        self.auto_exposure_cb = QCheckBox("Auto Exposure (N/A)")
+        self.auto_exposure_cb.setEnabled(False)
+        layout.addWidget(self.auto_exposure_cb, 7, 0, 1, 2)
+        
+        # Reset button
+        reset_btn = QPushButton("Reset All")
+        reset_btn.clicked.connect(self.reset_all)
+        layout.addWidget(reset_btn, 8, 0, 1, 3)
+        
+        # Apply custom styling
+        self.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #E5E5EA;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #007AFF;
+                width: 16px;
+                height: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
+            }
+            QCheckBox {
+                spacing: 8px;
+            }
+            QCheckBox:disabled {
+                color: #8E8E93;
+            }
+        """)
+        
+    def update_controls(self):
+        """Unified method to update all software controls."""
+        if not self.camera_thread:
+            return
+            
+        brightness = self.brightness_slider.value()
+        contrast = self.contrast_slider.value()
+        saturation = self.saturation_slider.value()
+        exposure = self.exposure_slider.value()
+        auto_wb = self.wb_auto_cb.isChecked()
+        wb_temp = self.wb_temp_slider.value()
+
+        self.wb_temp_slider.setEnabled(not auto_wb)
+        
+        self.brightness_value.setText(str(brightness))
+        self.contrast_value.setText(str(contrast))
+        self.saturation_value.setText(str(saturation))
+        self.exposure_value.setText(str(exposure))
+        self.wb_temp_value.setText(f"{wb_temp} K")
+        
+        # Set hardware properties
+        self.camera_thread.set_hardware_controls(
+            auto_wb=auto_wb,
+            wb_temp=wb_temp
+        )
+        
+        # Set software properties
+        self.camera_thread.set_software_controls(
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            exposure=exposure
+        )
+        
+    def reset_all(self):
+        self.brightness_slider.setValue(0)
+        self.contrast_slider.setValue(0)
+        self.saturation_slider.setValue(0)
+        self.exposure_slider.setValue(0)
+        self.wb_auto_cb.setChecked(True)
+        self.wb_temp_slider.setValue(4500)
+
+
+class HistogramWidget(QWidget):
+    """Live histogram display for exposure monitoring"""
+    
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(150)
+        self.setMaximumHeight(200)
+        self.histogram_data = None
+        
+    def update_histogram(self, frame):
+        """Update histogram from frame"""
+        if frame is None:
+            return
+            
+        # Calculate histograms
+        hist_b = cv2.calcHist([frame], [0], None, [256], [0, 256])
+        hist_g = cv2.calcHist([frame], [1], None, [256], [0, 256])
+        hist_r = cv2.calcHist([frame], [2], None, [256], [0, 256])
+        
+        # Normalize
+        hist_b = hist_b.flatten() / hist_b.max() if hist_b.max() > 0 else hist_b.flatten()
+        hist_g = hist_g.flatten() / hist_g.max() if hist_g.max() > 0 else hist_g.flatten()
+        hist_r = hist_r.flatten() / hist_r.max() if hist_r.max() > 0 else hist_r.flatten()
+        
+        self.histogram_data = (hist_b, hist_g, hist_r)
+        self.update()
+        
+    def paintEvent(self, event):
+        """Draw the histogram"""
+        if not self.histogram_data:
+            return
+            
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Background
+        painter.fillRect(self.rect(), QColor(240, 240, 240))
+        
+        # Draw grid
+        painter.setPen(QPen(QColor(200, 200, 200), 1))
+        for i in range(0, 11):
+            x = int(self.width() * i / 10)
+            painter.drawLine(x, 0, x, self.height())
+            
+        # Draw histograms
+        hist_b, hist_g, hist_r = self.histogram_data
+        
+        for i in range(256):
+            x = int(self.width() * i / 256)
+            
+            # Blue channel
+            painter.setPen(QPen(QColor(0, 0, 255, 128), 1))
+            h_b = int(self.height() * hist_b[i])
+            painter.drawLine(x, self.height(), x, self.height() - h_b)
+            
+            # Green channel
+            painter.setPen(QPen(QColor(0, 255, 0, 128), 1))
+            h_g = int(self.height() * hist_g[i])
+            painter.drawLine(x, self.height(), x, self.height() - h_g)
+            
+            # Red channel
+            painter.setPen(QPen(QColor(255, 0, 0, 128), 1))
+            h_r = int(self.height() * hist_r[i])
+            painter.drawLine(x, self.height(), x, self.height() - h_r)
 
 class ValidationReportDialog(QDialog):
     """A dialog to display the results of the quick validation."""
@@ -213,8 +564,8 @@ class SessionManager:
 
 class CameraThread(QThread):
     """Dedicated thread for camera operations with enhanced error handling"""
-    frameReady = pyqtSignal(np.ndarray)
-    statusUpdate = pyqtSignal(str, str)  # message, severity
+    frameReady = Signal(np.ndarray)
+    statusUpdate = Signal(str, str)  # message, severity
     
     def __init__(self):
         super().__init__()
@@ -224,6 +575,42 @@ class CameraThread(QThread):
         self.frame_times = deque(maxlen=30)
         self.fps = 0.0
         
+        # Software image processing values
+        self.sw_brightness = 0
+        self.sw_contrast = 0
+        self.sw_saturation = 0
+        self.sw_exposure_comp = 0
+        
+    def set_software_controls(self, brightness=None, contrast=None, saturation=None, exposure=None):
+        """Update software control values."""
+        if brightness is not None:
+            self.sw_brightness = brightness
+        if contrast is not None:
+            self.sw_contrast = contrast
+        if saturation is not None:
+            self.sw_saturation = saturation
+        if exposure is not None:
+            # Map exposure slider (-10 to 10) to a brightness compensation
+            self.sw_exposure_comp = exposure * 5
+
+    def set_hardware_controls(self, auto_wb=None, wb_temp=None):
+        """Set hardware-level camera controls if available."""
+        if not self.camera or not self.camera.isOpened():
+            return
+        
+        try:
+            if auto_wb is not None:
+                # Note: 1 for auto, 0 for manual.
+                self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0 if auto_wb else 0.0)
+            
+            # Only set temp in manual mode, and if the auto mode was just turned off
+            if wb_temp is not None and not auto_wb:
+                self.camera.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
+        except Exception as e:
+            # Silently fail if property is not supported
+            # logger.warning(f"Could not set hardware WB property: {e}")
+            pass
+
     def initialize_camera(self, index=0) -> bool:
         """Initialize camera with robust error handling, aiming for 8MP resolution."""
         logger.info(f"Attempting to initialize camera at index {index}...")
@@ -255,7 +642,8 @@ class CameraThread(QThread):
             # We can still set other useful defaults.
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
             self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1) # Default to autofocus on
-            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Default to auto exposure on
+            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75) # Default to auto exposure on
+            self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0) # Default to auto white balance on
             
             # Allow time for the camera to stabilize before reading properties
             time.sleep(1.0) 
@@ -280,7 +668,7 @@ class CameraThread(QThread):
             return False
         
     def run(self):
-        """Enhanced camera capture loop with optimized FPS monitoring"""
+        """Enhanced camera capture loop with software image processing"""
         self.running = True
         no_frame_count = 0
         
@@ -290,7 +678,11 @@ class CameraThread(QThread):
                 
                 if ret and frame is not None:
                     no_frame_count = 0
-                    self.current_frame = frame
+
+                    # Apply software processing
+                    processed_frame = self._process_frame(frame)
+                    
+                    self.current_frame = processed_frame
                     
                     # Correct FPS calculation over a rolling window
                     self.frame_times.append(time.perf_counter())
@@ -299,8 +691,8 @@ class CameraThread(QThread):
                         if time_span > 0:
                             self.fps = (len(self.frame_times) - 1) / time_span
                     
-                    self.frameReady.emit(frame)
-
+                    self.frameReady.emit(processed_frame)
+                    
                 else:
                     no_frame_count += 1
                     if no_frame_count > 100: # After ~1.6s of no frames
@@ -308,10 +700,42 @@ class CameraThread(QThread):
                         no_frame_count = 0 # Reset to avoid spamming
                         
             time.sleep(0.016)  # Target ~60Hz update rate
+
+    def _process_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Apply all software image processing steps."""
+        if frame is None:
+            return None
+        
+        try:
+            # 1. Brightness / Contrast (Software)
+            brightness = self.sw_brightness + self.sw_exposure_comp
+            # Map contrast from -100..100 to a multiplicative factor 0..2
+            contrast_alpha = 1.0 + (self.sw_contrast / 100.0)
             
+            adjusted_frame = cv2.convertScaleAbs(frame, alpha=contrast_alpha, beta=brightness)
+            
+            # 2. Saturation (Software)
+            if self.sw_saturation != 0:
+                hsv = cv2.cvtColor(adjusted_frame, cv2.COLOR_BGR2HSV)
+                h, s, v = cv2.split(hsv)
+                
+                # Map saturation from -100..100 to a factor 0..2
+                saturation_factor = 1.0 + (self.sw_saturation / 100.0)
+                
+                # Using convertScaleAbs for safe scaling and clipping
+                s = cv2.convertScaleAbs(s, alpha=saturation_factor, beta=0)
+                
+                final_hsv = cv2.merge([h, s, v])
+                adjusted_frame = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+
+            return adjusted_frame
+        except Exception as e:
+            logger.error(f"Software frame processing failed: {e}")
+            return frame # Return original frame on error
+
     def capture_image(self, quality="high") -> Optional[np.ndarray]:
         """
-        Captures the most recent frame from the preview stream.
+        Captures the most recent PROCESSED frame from the preview stream.
         This is more stable than reconfiguring the camera on the fly.
         """
         if self.current_frame is not None:
@@ -352,13 +776,14 @@ class AIScaleDataCollector(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        self.config_manager = ConfigManager(CONFIG_FILE)
+        self.db_manager = DatabaseManager(DATABASE_FILE)
         self.camera_thread = CameraThread()
         self.camera_thread.frameReady.connect(self.update_frame)
         self.camera_thread.statusUpdate.connect(self.handle_camera_status)
         self.current_class = ""
         self.dataset_path = Path("data/raw")
         self.session_manager = SessionManager(self.dataset_path)
-        self.settings = QSettings(ORGANIZATION, APP_NAME)
         
         # Timer for UI updates like FPS
         self.update_timer = QTimer(self)
@@ -507,7 +932,7 @@ class AIScaleDataCollector(QMainWindow):
         QApplication.processEvents()  # Ensure the message is shown immediately
 
         try:
-            report = quick_validate_dataset(self.dataset_path)
+            report = quick_validate_dataset(self.dataset_path, self.db_manager.db_path)
             dialog = ValidationReportDialog(report, self)
             dialog.exec()
             self.status_bar.showMessage("Validation complete.", 3000)
@@ -549,8 +974,8 @@ class AIScaleDataCollector(QMainWindow):
         for index, name in self.available_cameras:
             combo_box.addItem(name, userData=index)
             
-        # Try to restore the last used camera index
-        last_cam_index = self.settings.value("last_camera_index", 0, type=int)
+        # Try to restore the last used camera index from config
+        last_cam_index = self.config_manager.get("last_camera_index", 0)
         
         # Find the corresponding item in the combobox
         for i in range(combo_box.count()):
@@ -559,35 +984,38 @@ class AIScaleDataCollector(QMainWindow):
                 break
 
     def switch_camera(self, ui_index):
-        """Switches the camera feed to the selected device."""
+        """Switches camera with proper control updates"""
         if not self.available_cameras or ui_index < 0:
             return
 
-        # Get the actual camera index from the combobox userData
         camera_index = self.camera_combo.itemData(ui_index)
-        
         if camera_index is None:
             return
             
         logger.info(f"Switching to camera index: {camera_index}")
         
-        # Stop the current camera thread
         self.camera_thread.stop()
         
-        # Re-initialize and start with the new index
         if self.camera_thread.initialize_camera(camera_index):
             self.start_camera_feed()
-            self.settings.setValue("last_camera_index", camera_index)
+            self.config_manager.set("last_camera_index", camera_index)
+            
+            # Update camera controls with new camera
+            if hasattr(self, 'camera_controls'):
+                self.camera_controls.camera_thread = self.camera_thread
+                self.camera_controls.reset_all()
         else:
             self.handle_camera_status(f"Failed to switch to Camera {camera_index}", "error")
 
     def create_camera_section(self, parent_layout):
-        """Creates the main camera view and its associated controls."""
-        # Camera container
+        """Enhanced camera view with a scrollable controls panel."""
         camera_container = QWidget()
         camera_layout = QVBoxLayout(camera_container)
         camera_layout.setContentsMargins(0, 0, 0, 0)
         camera_layout.setSpacing(12)
+        
+        # Main camera area with side panel
+        camera_area = QHBoxLayout()
         
         # Camera display
         self.camera_view = QLabel("Initializing Camera...")
@@ -601,18 +1029,56 @@ class AIScaleDataCollector(QMainWindow):
             }
         """)
         self.camera_view.setMinimumSize(640, 480)
-        camera_layout.addWidget(self.camera_view, 1) # Add stretch factor of 1
+        camera_area.addWidget(self.camera_view, 3)
+        
+        # --- Side Panel with Scroll Area ---
+        side_panel_container = QWidget()
+        side_panel_container.setMaximumWidth(320)
+        side_panel_layout = QVBoxLayout(side_panel_container)
+        side_panel_layout.setContentsMargins(0, 0, 0, 0)
+        side_panel_layout.setSpacing(0)
 
-        # Status bar for FPS and Resolution
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }") # Seamless look
+
+        scroll_content_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content_widget)
+        scroll_layout.setContentsMargins(10, 10, 10, 10) # Padding for content
+        scroll_layout.setSpacing(15)
+
+        # Add camera controls widget to the scrollable layout
+        self.camera_controls = CameraControlsWidget(self.camera_thread)
+        scroll_layout.addWidget(self.camera_controls)
+        
+        # Add histogram display to the scrollable layout
+        self.histogram_widget = HistogramWidget()
+        scroll_layout.addWidget(self.histogram_widget)
+        
+        scroll_layout.addStretch(1) # Pushes content to the top
+        
+        scroll_area.setWidget(scroll_content_widget)
+        side_panel_layout.addWidget(scroll_area)
+        
+        camera_area.addWidget(side_panel_container, 1)
+        
+        camera_layout.addLayout(camera_area, 1)
+        
+        # Enhanced status bar
         status_layout = QHBoxLayout()
         self.fps_label = QLabel("FPS: --")
         self.resolution_label = QLabel("Resolution: --")
+        self.capture_indicator = QLabel("●")
+        self.capture_indicator.setStyleSheet("color: #30D158; font-size: 16px;")
+        self.capture_indicator.hide()
+        
         status_layout.addWidget(self.fps_label)
+        status_layout.addWidget(self.capture_indicator)
         status_layout.addStretch()
         status_layout.addWidget(self.resolution_label)
         camera_layout.addLayout(status_layout)
         
-        parent_layout.addWidget(camera_container, 5) # Give more stretch factor
+        parent_layout.addWidget(camera_container, 5)
         
     def create_simple_controls(self, parent_layout):
         """Create simplified and aligned controls section using a grid."""
@@ -734,25 +1200,60 @@ class AIScaleDataCollector(QMainWindow):
             self.capture_button.setEnabled(False)
             
     def capture_image(self):
-        """Simple capture with immediate feedback"""
+        """Enhanced capture with visual feedback and color correction"""
         if not self.current_class:
+            # Shake animation on the button
+            self.shake_widget(self.capture_button)
             QMessageBox.warning(self, "No Selection", "Please select a produce type first.")
             return
             
+        # Visual capture indication
+        self.capture_indicator.show()
+        QTimer.singleShot(200, self.capture_indicator.hide)
+        
         # Capture frame
         frame = self.camera_thread.capture_image()
         if frame is None:
+            self.shake_widget(self.capture_button)
             QMessageBox.critical(self, "Capture Error", "Failed to capture image.")
             return
             
+        # The frame is already processed by the camera thread, no extra processing needed here.
+        frame_to_save = frame
+            
         # Save image
-        self.save_image_async(frame)
+        self.save_image_async(frame_to_save)
         
-        # Visual feedback
-        self.capture_button.setText("Capturing...")
-        self.capture_button.setEnabled(False)
-        QTimer.singleShot(500, self.reset_capture_button)
+        # Success feedback
+        self.capture_button.setText("✓ Captured")
+        self.capture_button.setStyleSheet("""
+            QPushButton {
+                background-color: #30D158;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 12px 24px;
+                font-weight: 500;
+                font-size: 15px;
+            }
+        """)
+        QTimer.singleShot(300, self.reset_capture_button)
+
+    def shake_widget(self, widget):
+        """Shake animation for error feedback"""
+        original_pos = widget.pos()
         
+        animation = QPropertyAnimation(widget, b"pos")
+        animation.setDuration(100)
+        animation.setLoopCount(3)
+        
+        animation.setKeyValueAt(0, original_pos)
+        animation.setKeyValueAt(0.25, original_pos + QPoint(5, 0))
+        animation.setKeyValueAt(0.75, original_pos + QPoint(-5, 0))
+        animation.setKeyValueAt(1, original_pos)
+        
+        animation.start()
+
     def reset_capture_button(self):
         """Reset capture button after capture"""
         self.capture_button.setText("Capture Image")
@@ -768,6 +1269,7 @@ class AIScaleDataCollector(QMainWindow):
             
             if metadata:
                 self.session_manager.add_capture(metadata)
+                self.db_manager.add_capture(metadata) # Add to database
                 
             self.status_bar.showMessage(f"Saved: {filename}", 3000)
         else:
@@ -779,9 +1281,13 @@ class AIScaleDataCollector(QMainWindow):
         self.fps_label.setText(f"FPS: {fps:.1f}")
         
     def update_frame(self, frame):
-        """Update camera display"""
+        """Update camera display with histogram"""
         height, width, channel = frame.shape
         bytes_per_line = 3 * width
+        
+        # Update histogram
+        if hasattr(self, 'histogram_widget'):
+            self.histogram_widget.update_histogram(frame)
         
         # Convert to QImage
         q_image = QImage(frame.data, width, height, bytes_per_line,
@@ -868,7 +1374,7 @@ class AIScaleDataCollector(QMainWindow):
             filename = f"{self.current_class}_{count:04d}_{timestamp}.jpg"
             
             options = {
-                'create_preview': False,
+                'create_preview': self.config_manager.get("save_options")["create_preview"],
                 'create_metadata': True
             }
             cam_info = self.camera_thread.get_camera_info()
@@ -883,15 +1389,38 @@ class AIScaleDataCollector(QMainWindow):
             QMessageBox.critical(self, "Save Error", f"Failed to start save process: {str(e)}")
             
     def restore_settings(self):
-        """Restore saved settings"""
+        """Restore saved settings from config file"""
         # Window geometry
-        geometry = self.settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
-            
+        geometry_hex = self.config_manager.get("window_geometry")
+        if geometry_hex:
+            self.restoreGeometry(bytes.fromhex(geometry_hex))
+        
+        # Restore camera control settings
+        if hasattr(self, 'camera_controls'):
+            controls_settings = self.config_manager.get("camera_controls")
+            self.camera_controls.brightness_slider.setValue(controls_settings.get("brightness", 0))
+            self.camera_controls.contrast_slider.setValue(controls_settings.get("contrast", 0))
+            self.camera_controls.saturation_slider.setValue(controls_settings.get("saturation", 0))
+            self.camera_controls.exposure_slider.setValue(controls_settings.get("exposure_comp", 0))
+
+
     def closeEvent(self, event):
-        """Clean shutdown"""
-        self.settings.setValue("geometry", self.saveGeometry())
+        """Clean shutdown and save settings"""
+        # Save camera control settings
+        if hasattr(self, 'camera_controls'):
+            controls_settings = {
+                "brightness": self.camera_controls.brightness_slider.value(),
+                "contrast": self.camera_controls.contrast_slider.value(),
+                "saturation": self.camera_controls.saturation_slider.value(),
+                "exposure_comp": self.camera_controls.exposure_slider.value()
+            }
+            self.config_manager.set("camera_controls", controls_settings)
+            
+        # Save window geometry
+        self.config_manager.set("window_geometry", self.saveGeometry().toHex().data().decode())
+        
+        self.config_manager.save()
+        self.db_manager.close()
         self.camera_thread.stop()
         event.accept()
 

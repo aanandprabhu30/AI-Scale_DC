@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 AI-Scale Dataset Validator
-Validates collected dataset for training readiness
+Validates collected dataset for training readiness by querying the central database.
 """
 
 import os
@@ -11,111 +11,91 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 import argparse
+import sqlite3
+from datetime import datetime
 
-def validate_dataset(dataset_path: Path, output_report: Path = None):
-    """Validate dataset structure and image quality"""
+def validate_dataset(dataset_path: Path, db_path: Path, output_report: Path = None):
+    """Validate dataset structure and image quality using the database."""
     
     report = {
         "dataset_path": str(dataset_path),
-        "validation_time": "",
+        "database_path": str(db_path),
+        "validation_time": datetime.now().isoformat(),
         "classes": {},
         "issues": [],
         "recommendations": []
     }
     
-    if not dataset_path.exists():
-        report["issues"].append("Dataset path does not exist")
+    if not db_path.exists():
+        report["issues"].append(f"Database file does not exist at '{db_path}'")
         return report
-    
-    # Check class directories
-    class_dirs = [d for d in dataset_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
-    
-    if not class_dirs:
-        report["issues"].append("No class directories found")
+        
+    try:
+        con = sqlite3.connect(db_path)
+        cur = con.cursor()
+
+        # Get all captures from the database
+        cur.execute("SELECT class_name, filename, width, height, camera_settings FROM captures")
+        all_captures = cur.fetchall()
+
+        if not all_captures:
+            report["issues"].append("No captures found in the database.")
+            return report
+
+        # Group captures by class
+        class_data = defaultdict(list)
+        for class_name, filename, width, height, camera_settings_json in all_captures:
+            class_data[class_name].append({
+                "filename": filename,
+                "resolution": (width, height),
+                "camera_settings": json.loads(camera_settings_json or '{}')
+            })
+
+    except (sqlite3.Error, json.JSONDecodeError) as e:
+        report["issues"].append(f"Failed to query or parse database: {e}")
         return report
+    finally:
+        if 'con' in locals() and con:
+            con.close()
+
+    total_images = len(all_captures)
     
-    total_images = 0
-    total_size = 0
-    
-    for class_dir in class_dirs:
-        class_name = class_dir.name
+    for class_name, captures in class_data.items():
         class_info = {
-            "image_count": 0,
-            "total_size_mb": 0,
+            "image_count": len(captures),
             "resolutions": defaultdict(int),
-            "framerates": defaultdict(int),
             "brightness_values": [],
             "contrast_values": [],
+            "saturation_values": [],
+            "exposure_comp_values": [],
             "issues": []
         }
         
-        # Check images in class
-        image_files = sorted(list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.jpeg")))
-        
-        if not image_files:
-            class_info["issues"].append("No images found")
-            report["classes"][class_name] = class_info
-            continue
-        
-        class_info["image_count"] = len(image_files)
-        total_images += len(image_files)
-        
-        # Validate each image
-        for img_path in image_files:
-            try:
-                # --- Basic File Check ---
-                file_size = img_path.stat().st_size
-                class_info["total_size_mb"] += file_size / (1024 * 1024)
-                total_size += file_size
-                
-                # --- Image Loading Check ---
-                img = cv2.imread(str(img_path))
-                if img is None:
-                    class_info["issues"].append(f"Cannot load image: {img_path.name}")
-                    continue
-                
-                # --- Metadata Check ---
-                meta_path = img_path.with_suffix('.json')
-                if meta_path.exists():
-                    with open(meta_path, 'r') as f:
-                        metadata = json.load(f)
-                    
-                    # Resolution
-                    res = tuple(metadata.get("resolution", (0,0)))
-                    class_info["resolutions"][f"{res[0]}x{res[1]}"] += 1
-                    
-                    # Camera settings
-                    cam_settings = metadata.get("camera_settings", {})
-                    fps = cam_settings.get("fps", 0)
-                    if fps > 0:
-                        class_info["framerates"][str(fps)] += 1
-                    
-                    brightness = cam_settings.get("brightness")
-                    if brightness is not None:
-                        class_info["brightness_values"].append(brightness)
-                        
-                    contrast = cam_settings.get("contrast")
-                    if contrast is not None:
-                        class_info["contrast_values"].append(contrast)
+        # Validate each image record
+        for capture in captures:
+            # --- Filesystem Check ---
+            img_path = dataset_path / class_name / capture["filename"]
+            if not img_path.exists():
+                class_info["issues"].append(f"Missing file on disk: {capture['filename']}")
+                continue
 
-                else:
-                    # Fallback if no metadata exists
-                    height, width = img.shape[:2]
-                    class_info["resolutions"][f"{width}x{height}"] += 1
-                    class_info["issues"].append(f"No metadata file for: {img_path.name}")
-                    
-            except Exception as e:
-                class_info["issues"].append(f"Error processing {img_path.name}: {str(e)}")
-        
+            # --- Metadata Analysis ---
+            res_str = f"{capture['resolution'][0]}x{capture['resolution'][1]}"
+            class_info["resolutions"][res_str] += 1
+            
+            # Camera settings from software controls
+            cam_settings = capture.get("camera_settings", {})
+            class_info["brightness_values"].append(cam_settings.get("brightness", 0))
+            class_info["contrast_values"].append(cam_settings.get("contrast", 0))
+            class_info["saturation_values"].append(cam_settings.get("saturation", 0))
+            class_info["exposure_comp_values"].append(cam_settings.get("exposure_comp", 0))
+
         # --- Class-level Analysis ---
         if class_info["image_count"] < 50:
-            class_info["issues"].append(f"Low image count: {class_info['image_count']} (recommend 50+)")
+            report["recommendations"].append(f"Class '{class_name}' has low image count: {class_info['image_count']} (recommend 50+)")
         
         if len(class_info["resolutions"]) > 1:
-            class_info["issues"].append(f"Inconsistent resolutions found: {list(class_info['resolutions'].keys())}")
-        
-        if len(class_info["framerates"]) > 1:
-            class_info["issues"].append(f"Inconsistent framerates found: {list(class_info['framerates'].keys())}")
+            class_info["issues"].append(f"Inconsistent resolutions found in '{class_name}': {list(class_info['resolutions'].keys())}")
             
         report["classes"][class_name] = class_info
     
@@ -123,8 +103,8 @@ def validate_dataset(dataset_path: Path, output_report: Path = None):
     if total_images < 500:
         report["recommendations"].append(f"Total images ({total_images}) is low for training. Aim for 1000+ images.")
     
-    if len(class_dirs) < 5:
-        report["recommendations"].append(f"Few classes ({len(class_dirs)}). Consider adding more variety.")
+    if len(class_data) < 5:
+        report["recommendations"].append(f"Few classes ({len(class_data)}). Consider adding more variety.")
     
     # Check for class imbalance
     class_counts = [info["image_count"] for info in report["classes"].values()]
@@ -132,12 +112,13 @@ def validate_dataset(dataset_path: Path, output_report: Path = None):
         max_count = max(class_counts)
         min_count = min(class_counts)
         if max_count > min_count * 3:
-            report["recommendations"].append("Class imbalance detected. Consider balancing dataset.")
+            report["recommendations"].append("Significant class imbalance detected. Consider augmenting smaller classes or collecting more data.")
     
     # Save report
     if output_report:
+        output_report.parent.mkdir(parents=True, exist_ok=True)
         with open(output_report, 'w') as f:
-            json.dump(report, f, indent=2)
+            json.dump(report, f, indent=4)
     
     return report
 
@@ -146,7 +127,9 @@ def print_report(report):
     print("=" * 60)
     print("AI-SCALE DATASET VALIDATION REPORT")
     print("=" * 60)
-    print(f"Dataset: {report['dataset_path']}")
+    print(f"Dataset Path: {report.get('dataset_path')}")
+    print(f"Database Path: {report.get('database_path')}")
+    print(f"Validation Time: {report.get('validation_time')}")
     print()
     
     # Summary
@@ -163,30 +146,30 @@ def print_report(report):
     # Class details
     print("📁 CLASS DETAILS:")
     for class_name, info in report["classes"].items():
-        print(f"   {class_name}:")
+        print(f"   {class_name.upper()}:")
         print(f"     - Images: {info['image_count']}")
-        print(f"     - Size: {info['total_size_mb']:.1f} MB")
         
         if info["resolutions"]:
             res_str = ", ".join([f"{res} ({count})" for res, count in info["resolutions"].items()])
             print(f"     - Resolutions: {res_str}")
-        
-        if info["framerates"]:
-            fps_str = ", ".join([f"{fps}fps ({count})" for fps, count in info["framerates"].items()])
-            print(f"     - Framerates: {fps_str}")
-            
+
         if info["brightness_values"]:
             avg_b = np.mean(info['brightness_values'])
             std_b = np.std(info['brightness_values'])
-            print(f"     - Brightness: Avg={avg_b:.2f}, StdDev={std_b:.2f}")
+            print(f"     - Brightness:  Avg={avg_b:.1f}, StdDev={std_b:.1f}")
 
         if info["contrast_values"]:
             avg_c = np.mean(info['contrast_values'])
             std_c = np.std(info['contrast_values'])
-            print(f"     - Contrast:   Avg={avg_c:.2f}, StdDev={std_c:.2f}")
+            print(f"     - Contrast:    Avg={avg_c:.1f}, StdDev={std_c:.1f}")
+            
+        if info["saturation_values"]:
+            avg_s = np.mean(info['saturation_values'])
+            std_s = np.std(info['saturation_values'])
+            print(f"     - Saturation:  Avg={avg_s:.1f}, StdDev={std_s:.1f}")
 
         if info["issues"]:
-            print(f"     - Issues: {len(info['issues'])}")
+            print(f"     - Issues Found: {len(info['issues'])}")
             for issue in info["issues"][:3]:  # Show first 3 issues
                 print(f"       - {issue}")
             if len(info["issues"]) > 3:
@@ -201,19 +184,23 @@ def print_report(report):
         print()
     
     # Overall status
-    if total_issues == 0:
+    if total_issues == 0 and total_images > 0:
         print("✅ Dataset validation passed!")
     else:
-        print(f"⚠️  Dataset has {total_issues} issues to address")
+        print(f"⚠️  Dataset has {total_issues} issues and/or recommendations to address.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate AI-Scale dataset")
-    parser.add_argument("dataset_path", type=Path, help="Path to dataset directory")
-    parser.add_argument("--output", "-o", type=Path, help="Output report file")
+    parser = argparse.ArgumentParser(
+        description="Validate an AI-Scale dataset by querying its database.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("dataset_path", type=Path, help="Path to the root dataset directory (e.g., 'data/raw').")
+    parser.add_argument("--db-path", type=Path, default="data/metadata.db", help="Path to the metadata SQLite database.")
+    parser.add_argument("--output", "-o", type=Path, help="Path to save the JSON output report file.")
     
     args = parser.parse_args()
     
-    report = validate_dataset(args.dataset_path, args.output)
+    report = validate_dataset(args.dataset_path, args.db_path, args.output)
     print_report(report)
 
 if __name__ == "__main__":
