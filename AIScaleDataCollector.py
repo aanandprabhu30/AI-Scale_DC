@@ -53,7 +53,6 @@ except ImportError:
 import shutil
 import csv
 from tools.data_processing.quick_validate import quick_validate_dataset
-from tools.data_processing.dataset_validator import validate_dataset
 
 
 # Constants
@@ -147,7 +146,7 @@ class SaveWorker(QThread):
             self.finished.emit(False, str(e), None)
 
 
-class QuickValidationReportDialog(QDialog):
+class ValidationReportDialog(QDialog):
     """A dialog to display the results of the quick validation."""
     def __init__(self, report_data: dict, parent=None):
         super().__init__(parent)
@@ -200,83 +199,6 @@ class QuickValidationReportDialog(QDialog):
         return "\n".join(lines)
 
 
-class FullValidationReportDialog(QDialog):
-    """A dialog to display the detailed validation report."""
-    def __init__(self, report_data: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Full Dataset Validation Report")
-        self.setMinimumSize(650, 600)
-
-        layout = QVBoxLayout(self)
-
-        report_text_edit = QTextEdit()
-        report_text_edit.setReadOnly(True)
-        report_text_edit.setFontFamily("monospace")
-        report_text_edit.setText(self.format_report(report_data))
-        
-        layout.addWidget(report_text_edit)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        button_box.accepted.connect(self.accept)
-        layout.addWidget(button_box)
-
-    def format_report(self, report: dict) -> str:
-        """Formats the full report dictionary into a readable string."""
-        lines = ["AI-SCALE DATASET VALIDATION REPORT"]
-        lines.append("=" * 40)
-        
-        # Summary
-        total_classes = len(report.get("classes", {}))
-        total_images = sum(info.get("image_count", 0) for info in report.get("classes", {}).values())
-        total_issues = sum(len(info.get("issues", [])) for info in report.get("classes", {}).values())
-
-        lines.append("\n--- Summary ---")
-        lines.append(f"  - Classes: {total_classes}")
-        lines.append(f"  - Total Images: {total_images}")
-        lines.append(f"  - Issues Found: {total_issues}")
-
-        # Class details
-        lines.append("\n--- Class Details ---")
-        for class_name, info in sorted(report.get("classes", {}).items()):
-            lines.append(f"\n  - {class_name}:")
-            lines.append(f"    - Images: {info.get('image_count', 0)}")
-            lines.append(f"    - Size: {info.get('total_size_mb', 0):.1f} MB")
-            
-            if info.get("resolutions"):
-                res_str = ", ".join([f"{res} ({count})" for res, count in info["resolutions"].items()])
-                lines.append(f"    - Resolutions: {res_str}")
-        
-            if info.get("framerates"):
-                fps_str = ", ".join([f"{fps}fps ({count})" for fps, count in info["framerates"].items()])
-                lines.append(f"    - Framerates: {fps_str}")
-            
-            if info.get("brightness_values"):
-                avg_b = np.mean(info['brightness_values'])
-                std_b = np.std(info['brightness_values'])
-                lines.append(f"    - Brightness: Avg={avg_b:.2f}, StdDev={std_b:.2f}")
-
-            if info.get("contrast_values"):
-                avg_c = np.mean(info['contrast_values'])
-                std_c = np.std(info['contrast_values'])
-                lines.append(f"    - Contrast:   Avg={avg_c:.2f}, StdDev={std_c:.2f}")
-
-            if info.get("issues"):
-                lines.append(f"    - Issues: {len(info['issues'])}")
-                for issue in info["issues"][:3]:
-                    lines.append(f"      - {issue}")
-                if len(info["issues"]) > 3:
-                    lines.append(f"      ... and {len(info['issues']) - 3} more")
-        
-        # Recommendations
-        if report.get("recommendations"):
-            lines.append("\n--- Recommendations ---")
-            for rec in report["recommendations"]:
-                lines.append(f"  - {rec}")
-        
-        lines.append("\n" + "="*40)
-        return "\n".join(lines)
-
-
 class SessionManager:
     """Minimal session manager for tracking captures"""
     def __init__(self, base_path: Path):
@@ -303,63 +225,53 @@ class CameraThread(QThread):
         self.fps = 0.0
         
     def initialize_camera(self, index=0) -> bool:
-        """Initialize camera with robust error handling and detailed logging."""
+        """Initialize camera with robust error handling, aiming for 8MP resolution."""
         logger.info(f"Attempting to initialize camera at index {index}...")
         try:
             # On macOS, AVFoundation is preferred.
             self.camera = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
             logger.info(f"Camera backend set to AVFoundation.")
 
-            if not self.camera.isOpened():
+            if not self.camera or not self.camera.isOpened():
                 logger.warning(f"Failed to open camera with AVFoundation. Trying default backend...")
                 self.camera = cv2.VideoCapture(index) # Fallback to default
-
-            if self.camera and self.camera.isOpened():
-                logger.info("Camera opened successfully. Setting properties...")
-
-                # --- Set target resolution to 8MP ---
-                high_res_config = IMX219_CONFIGS["capture_high"]
-                target_width = high_res_config["width"]
-                target_height = high_res_config["height"]
-                target_fps = high_res_config["fps"]
-
-                logger.info(f"Requesting 8MP resolution: {target_width}x{target_height} @ {target_fps}fps")
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
-                self.camera.set(cv2.CAP_PROP_FPS, target_fps)
-                # --- End resolution setting ---
-
-                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
-                # Note: Some properties might not be supported by all cameras/backends
-                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, CAMERA_AUTOFOCUS)
-                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAMERA_AUTO_EXPOSURE)
-                
-                # Allow time for the camera to stabilize before reading properties
-                time.sleep(1.0) # Increase sleep time for high-res stabilization
-
-                width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                
-                if abs(width - target_width) > 1 or abs(height - target_height) > 1:
-                    logger.warning(
-                        f"Camera did not accept {target_width}x{target_height}. "
-                        f"Actual resolution: {width}x{height}. "
-                        "The camera may not support this resolution or is in use by another app."
-                    )
-                
-                if width == 0 or height == 0:
-                    logger.error("Camera returned 0x0 resolution. It might be in use or drivers are faulty.")
-                    self.camera.release()
-                    self.statusUpdate.emit("Camera resolution is 0x0. Is it in use?", "error")
+                if not self.camera or not self.camera.isOpened():
+                    self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
                     return False
 
-                self.statusUpdate.emit(f"Camera initialized: {width}x{height}", "success")
-                logger.info(f"Camera successfully initialized with resolution {width}x{height}.")
-                return True
-            else:
-                self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
-                logger.error(f"Failed to open camera at index {index} with any backend.")
+            logger.info("Camera opened successfully. Requesting 8MP resolution...")
+            
+            # Request 8MP (3280x2464) resolution
+            high_res_config = IMX219_CONFIGS["capture_high"]
+            target_width = high_res_config["width"]
+            target_height = high_res_config["height"]
+            target_fps = high_res_config["fps"]
+            
+            self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
+            self.camera.set(cv2.CAP_PROP_FPS, target_fps)
+
+            # We can still set other useful defaults.
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+            self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1) # Default to autofocus on
+            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Default to auto exposure on
+            
+            # Allow time for the camera to stabilize before reading properties
+            time.sleep(1.0) 
+
+            width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            if width == 0 or height == 0:
+                logger.error("Camera returned 0x0 resolution. It might be in use or drivers are faulty.")
+                self.camera.release()
+                self.statusUpdate.emit("Camera resolution is 0x0. Is it in use?", "error")
                 return False
+
+            self.statusUpdate.emit(f"Camera initialized: {width}x{height}", "success")
+            logger.info(f"Camera successfully initialized with default resolution: {width}x{height}.")
+            return True
             
         except Exception as e:
             error_msg = f"Exception during camera init: {str(e)}"
@@ -555,16 +467,10 @@ class AIScaleDataCollector(QMainWindow):
         settings_action.triggered.connect(self.show_camera_settings)
         file_menu.addAction(settings_action)
         
-        file_menu.addSeparator()
-
-        # Add validation actions
-        quick_validate_action = QAction("&Quick Validate Dataset", self)
-        quick_validate_action.triggered.connect(self.run_quick_validation)
-        file_menu.addAction(quick_validate_action)
-
-        full_validate_action = QAction("Full &Validation Report", self)
-        full_validate_action.triggered.connect(self.run_full_validation)
-        file_menu.addAction(full_validate_action)
+        # Add a "Validate Dataset" action
+        validate_action = QAction("&Validate Dataset", self)
+        validate_action.triggered.connect(self.run_quick_validation)
+        file_menu.addAction(validate_action)
         
         file_menu.addSeparator()
         
@@ -602,7 +508,7 @@ class AIScaleDataCollector(QMainWindow):
 
         try:
             report = quick_validate_dataset(self.dataset_path)
-            dialog = QuickValidationReportDialog(report, self)
+            dialog = ValidationReportDialog(report, self)
             dialog.exec()
             self.status_bar.showMessage("Validation complete.", 3000)
         except Exception as e:
@@ -611,24 +517,6 @@ class AIScaleDataCollector(QMainWindow):
                 self, 
                 "Validation Error", 
                 f"Could not run the validation script.\n\nError: {e}"
-            )
-
-    def run_full_validation(self):
-        """Runs the full validation script and displays a detailed report."""
-        self.status_bar.showMessage("Running full validation... (this may take a moment)", 5000)
-        QApplication.processEvents()
-
-        try:
-            report = validate_dataset(self.dataset_path)
-            dialog = FullValidationReportDialog(report, self)
-            dialog.exec()
-            self.status_bar.showMessage("Full validation complete.", 3000)
-        except Exception as e:
-            logger.error(f"Failed to run full validation script: {e}", exc_info=True)
-            QMessageBox.critical(
-                self, 
-                "Validation Error", 
-                f"Could not run the full validation script.\n\nError: {e}"
             )
 
     def list_available_cameras(self) -> List[Tuple[int, str]]:
