@@ -42,13 +42,15 @@ def validate_dataset(dataset_path: Path, output_report: Path = None):
         class_info = {
             "image_count": 0,
             "total_size_mb": 0,
-            "resolutions": [],
-            "file_sizes": [],
+            "resolutions": defaultdict(int),
+            "framerates": defaultdict(int),
+            "brightness_values": [],
+            "contrast_values": [],
             "issues": []
         }
         
         # Check images in class
-        image_files = list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.jpeg")) + list(class_dir.glob("*.png"))
+        image_files = sorted(list(class_dir.glob("*.jpg")) + list(class_dir.glob("*.jpeg")))
         
         if not image_files:
             class_info["issues"].append("No images found")
@@ -61,45 +63,63 @@ def validate_dataset(dataset_path: Path, output_report: Path = None):
         # Validate each image
         for img_path in image_files:
             try:
-                # Check file size
+                # --- Basic File Check ---
                 file_size = img_path.stat().st_size
                 class_info["total_size_mb"] += file_size / (1024 * 1024)
                 total_size += file_size
-                class_info["file_sizes"].append(file_size)
                 
-                # Check image can be loaded
+                # --- Image Loading Check ---
                 img = cv2.imread(str(img_path))
                 if img is None:
                     class_info["issues"].append(f"Cannot load image: {img_path.name}")
                     continue
                 
-                # Check resolution
-                height, width = img.shape[:2]
-                class_info["resolutions"].append((width, height))
-                
-                # Check for very small images
-                if width < 100 or height < 100:
-                    class_info["issues"].append(f"Very small image: {img_path.name} ({width}x{height})")
-                
-                # Check for very large images
-                if width > 5000 or height > 5000:
-                    class_info["issues"].append(f"Very large image: {img_path.name} ({width}x{height})")
+                # --- Metadata Check ---
+                meta_path = img_path.with_suffix('.json')
+                if meta_path.exists():
+                    with open(meta_path, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Resolution
+                    res = tuple(metadata.get("resolution", (0,0)))
+                    class_info["resolutions"][f"{res[0]}x{res[1]}"] += 1
+                    
+                    # Camera settings
+                    cam_settings = metadata.get("camera_settings", {})
+                    fps = cam_settings.get("fps", 0)
+                    if fps > 0:
+                        class_info["framerates"][str(fps)] += 1
+                    
+                    brightness = cam_settings.get("brightness")
+                    if brightness is not None:
+                        class_info["brightness_values"].append(brightness)
+                        
+                    contrast = cam_settings.get("contrast")
+                    if contrast is not None:
+                        class_info["contrast_values"].append(contrast)
+
+                else:
+                    # Fallback if no metadata exists
+                    height, width = img.shape[:2]
+                    class_info["resolutions"][f"{width}x{height}"] += 1
+                    class_info["issues"].append(f"No metadata file for: {img_path.name}")
                     
             except Exception as e:
                 class_info["issues"].append(f"Error processing {img_path.name}: {str(e)}")
         
-        # Class-specific recommendations
+        # --- Class-level Analysis ---
         if class_info["image_count"] < 50:
             class_info["issues"].append(f"Low image count: {class_info['image_count']} (recommend 50+)")
         
-        if class_info["image_count"] > 0:
-            avg_size = class_info["total_size_mb"] / class_info["image_count"]
-            if avg_size > 5:  # 5MB per image
-                class_info["issues"].append(f"Large average file size: {avg_size:.1f}MB per image")
+        if len(class_info["resolutions"]) > 1:
+            class_info["issues"].append(f"Inconsistent resolutions found: {list(class_info['resolutions'].keys())}")
         
+        if len(class_info["framerates"]) > 1:
+            class_info["issues"].append(f"Inconsistent framerates found: {list(class_info['framerates'].keys())}")
+            
         report["classes"][class_name] = class_info
     
-    # Overall recommendations
+    # --- Overall Recommendations ---
     if total_images < 500:
         report["recommendations"].append(f"Total images ({total_images}) is low for training. Aim for 1000+ images.")
     
@@ -144,15 +164,29 @@ def print_report(report):
     print("📁 CLASS DETAILS:")
     for class_name, info in report["classes"].items():
         print(f"   {class_name}:")
-        print(f"     Images: {info['image_count']}")
-        print(f"     Size: {info['total_size_mb']:.1f} MB")
+        print(f"     - Images: {info['image_count']}")
+        print(f"     - Size: {info['total_size_mb']:.1f} MB")
         
         if info["resolutions"]:
-            unique_res = set(info["resolutions"])
-            print(f"     Resolutions: {len(unique_res)} unique")
+            res_str = ", ".join([f"{res} ({count})" for res, count in info["resolutions"].items()])
+            print(f"     - Resolutions: {res_str}")
         
+        if info["framerates"]:
+            fps_str = ", ".join([f"{fps}fps ({count})" for fps, count in info["framerates"].items()])
+            print(f"     - Framerates: {fps_str}")
+            
+        if info["brightness_values"]:
+            avg_b = np.mean(info['brightness_values'])
+            std_b = np.std(info['brightness_values'])
+            print(f"     - Brightness: Avg={avg_b:.2f}, StdDev={std_b:.2f}")
+
+        if info["contrast_values"]:
+            avg_c = np.mean(info['contrast_values'])
+            std_c = np.std(info['contrast_values'])
+            print(f"     - Contrast:   Avg={avg_c:.2f}, StdDev={std_c:.2f}")
+
         if info["issues"]:
-            print(f"     Issues: {len(info['issues'])}")
+            print(f"     - Issues: {len(info['issues'])}")
             for issue in info["issues"][:3]:  # Show first 3 issues
                 print(f"       - {issue}")
             if len(info["issues"]) > 3:

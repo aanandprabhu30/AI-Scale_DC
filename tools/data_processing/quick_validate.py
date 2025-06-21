@@ -114,4 +114,47 @@ def get_dataset_stats(dataset_path: Path) -> Dict:
     if stats["classes"]:
         stats["avg_images_per_class"] = stats["total_images"] / len(stats["classes"])
     
-    return stats 
+    return stats
+
+def print_quick_report(report: Dict):
+    """Prints a user-friendly report from the validation results."""
+    print("--- Quick Dataset Validation Report ---")
+    if report["valid"]:
+        print("✅ Status: Looks Good!")
+    else:
+        print("❌ Status: Issues Found!")
+
+    print(f"\nSummary:")
+    print(f"  - Total Classes: {report['total_classes']}")
+    print(f"  - Total Images: {report['total_images']}")
+    print(f"  - Total Size: {report['total_size_mb']:.2f} MB")
+
+    if report["issues"]:
+        print("\nIssues:")
+        # Print only unique, top-level issues
+        for issue in sorted(list(set(report["issues"]))):
+             # Don't print class-specific issues here, they are shown below
+            if ":" not in issue:
+                print(f"  - {issue}")
+
+
+    print("\nClass Details:")
+    if not report["class_summary"]:
+        print("  - No classes found to detail.")
+    else:
+        for class_name, summary in sorted(report["class_summary"].items()):
+            print(f"  - {class_name}: {summary['count']} images ({summary['size_mb']:.2f} MB)")
+            if summary['issues']:
+                for issue in summary['issues']:
+                    print(f"    - ⚠️ {issue}")
+    print("\n---------------------------------------")
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Quickly validate an AI-Scale dataset.")
+    parser.add_argument("dataset_path", type=Path, help="Path to the root of the dataset (e.g., data/raw).")
+    args = parser.parse_args()
+
+    validation_result = quick_validate_dataset(args.dataset_path)
+    print_quick_report(validation_result) 

@@ -22,17 +22,38 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QComboBox, QMessageBox, QInputDialog, QGridLayout,
-        QDialog, QDialogButtonBox
+        QDialog, QDialogButtonBox, QStyleFactory, QTextEdit
     )
     from PySide6.QtCore import Qt, QTimer, Signal as pyqtSignal, QThread, QSettings
     from PySide6.QtGui import QPixmap, QImage, QKeySequence, QShortcut, QAction
+
+    # Add a dedicated function to check for Qt plugin paths
+    from PySide6.QtCore import QLibraryInfo
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    def check_qt_plugins():
+        """Helper function to diagnose Qt plugin issues."""
+        logger.info("---- Checking Qt Plugin Paths ----")
+        paths = QLibraryInfo.location(QLibraryInfo.PluginsPath)
+        logger.info(f"Expected Qt Plugins Path: {paths}")
+        if not os.path.isdir(paths):
+            logger.warning("Qt Plugins path does not exist!")
+        else:
+            logger.info(f"Platform plugins found: {[d for d in os.listdir(paths) if 'platforms' in d]}")
+        logger.info("---------------------------------")
+
 except ImportError:
     print("❌ PySide6 is not installed. Please run the setup script or install it manually:")
     print("   pip install PySide6")
     sys.exit(1)
 
+# --- App-specific Imports ---
 import shutil
 import csv
+from tools.data_processing.quick_validate import quick_validate_dataset
+
 
 # Constants
 APP_NAME = "AI-Scale Data Collector"
@@ -125,6 +146,59 @@ class SaveWorker(QThread):
             self.finished.emit(False, str(e), None)
 
 
+class ValidationReportDialog(QDialog):
+    """A dialog to display the results of the quick validation."""
+    def __init__(self, report_data: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Quick Validation Report")
+        self.setMinimumSize(550, 450)
+
+        layout = QVBoxLayout(self)
+
+        report_text_edit = QTextEdit()
+        report_text_edit.setReadOnly(True)
+        report_text_edit.setFontFamily("monospace")
+        report_text_edit.setText(self.format_report(report_data))
+        
+        layout.addWidget(report_text_edit)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        button_box.accepted.connect(self.accept)
+        layout.addWidget(button_box)
+
+    def format_report(self, report: dict) -> str:
+        """Formats the report dictionary into a readable string."""
+        lines = []
+        if report.get("valid", False):
+            lines.append("✅ Status: Looks Good!")
+        else:
+            lines.append("❌ Status: Issues Found!")
+        
+        lines.append("\n--- Summary ---")
+        lines.append(f"  - Total Classes: {report.get('total_classes', 0)}")
+        lines.append(f"  - Total Images: {report.get('total_images', 0)}")
+        lines.append(f"  - Total Size: {report.get('total_size_mb', 0):.2f} MB")
+
+        if report.get("issues"):
+            lines.append("\n--- Issues ---")
+            top_level_issues = sorted({issue for issue in report["issues"] if ":" not in issue})
+            for issue in top_level_issues:
+                lines.append(f"  - {issue}")
+        
+        lines.append("\n--- Class Details ---")
+        class_summary = report.get("class_summary", {})
+        if not class_summary:
+            lines.append("  - No classes found to detail.")
+        else:
+            for name, summary in sorted(class_summary.items()):
+                lines.append(f"  - {name}: {summary['count']} images ({summary['size_mb']:.2f} MB)")
+                if summary['issues']:
+                    for issue in summary['issues']:
+                        lines.append(f"    - ⚠️ {issue}")
+        
+        return "\n".join(lines)
+
+
 class SessionManager:
     """Minimal session manager for tracking captures"""
     def __init__(self, base_path: Path):
@@ -151,60 +225,79 @@ class CameraThread(QThread):
         self.fps = 0.0
         
     def initialize_camera(self, index=0) -> bool:
-        """Initialize camera with robust error handling"""
+        """Initialize camera with robust error handling and detailed logging."""
+        logger.info(f"Attempting to initialize camera at index {index}...")
         try:
-            # Try AVFoundation backend first (best for macOS)
-            self.camera = cv2.VideoCapture(index, CAMERA_BACKEND)
-            
+            # On macOS, AVFoundation is preferred.
+            self.camera = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
+            logger.info(f"Camera backend set to AVFoundation.")
+
             if not self.camera.isOpened():
-                # Fallback to default
-                self.camera = cv2.VideoCapture(index)
-                
-            if self.camera.isOpened():
-                # Set essential camera properties, but let resolution default for stability
+                logger.warning(f"Failed to open camera with AVFoundation. Trying default backend...")
+                self.camera = cv2.VideoCapture(index) # Fallback to default
+
+            if self.camera and self.camera.isOpened():
+                logger.info("Camera opened successfully. Setting properties...")
                 self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+                # Note: Some properties might not be supported by all cameras/backends
                 self.camera.set(cv2.CAP_PROP_AUTOFOCUS, CAMERA_AUTOFOCUS)
                 self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, CAMERA_AUTO_EXPOSURE)
                 
-                # Give the camera a moment to stabilize
+                # Allow time for the camera to stabilize before reading properties
                 time.sleep(0.5)
 
-                # Verify settings
-                actual_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-                actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                
-                self.statusUpdate.emit(
-                    f"Camera initialized: {actual_width}x{actual_height}", 
-                    "success"
-                )
+                width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                if width == 0 or height == 0:
+                    logger.error("Camera returned 0x0 resolution. It might be in use or drivers are faulty.")
+                    self.camera.release()
+                    self.statusUpdate.emit("Camera resolution is 0x0. Is it in use?", "error")
+                    return False
+
+                self.statusUpdate.emit(f"Camera initialized: {width}x{height}", "success")
+                logger.info(f"Camera successfully initialized with resolution {width}x{height}.")
                 return True
-            
-            self.statusUpdate.emit("Camera not found", "error")
-            return False
+            else:
+                self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
+                logger.error(f"Failed to open camera at index {index} with any backend.")
+                return False
             
         except Exception as e:
-            self.statusUpdate.emit(f"Camera init error: {str(e)}", "error")
+            error_msg = f"Exception during camera init: {str(e)}"
+            self.statusUpdate.emit(error_msg, "error")
+            logger.exception(error_msg)
             return False
         
     def run(self):
         """Enhanced camera capture loop with optimized FPS monitoring"""
         self.running = True
+        no_frame_count = 0
         
         while self.running:
             if self.camera and self.camera.isOpened():
-                start_time = time.time()
                 ret, frame = self.camera.read()
                 
                 if ret and frame is not None:
+                    no_frame_count = 0
                     self.current_frame = frame
-                    self.frameReady.emit(frame)
                     
-                    # Calculate FPS
-                    self.frame_times.append(time.time() - start_time)
-                    if len(self.frame_times) == 30:
-                        self.fps = 1.0 / (sum(self.frame_times) / len(self.frame_times))
+                    # Correct FPS calculation over a rolling window
+                    self.frame_times.append(time.perf_counter())
+                    if len(self.frame_times) > 1:
+                        time_span = self.frame_times[-1] - self.frame_times[0]
+                        if time_span > 0:
+                            self.fps = (len(self.frame_times) - 1) / time_span
+                    
+                    self.frameReady.emit(frame)
+
+                else:
+                    no_frame_count += 1
+                    if no_frame_count > 100: # After ~1.6s of no frames
+                        self.statusUpdate.emit("No frames received from camera.", "warning")
+                        no_frame_count = 0 # Reset to avoid spamming
                         
-            time.sleep(0.016)  # Target 60Hz update rate
+            time.sleep(0.016)  # Target ~60Hz update rate
             
     def capture_image(self, quality="high") -> Optional[np.ndarray]:
         """
@@ -250,11 +343,17 @@ class AIScaleDataCollector(QMainWindow):
     def __init__(self):
         super().__init__()
         self.camera_thread = CameraThread()
+        self.camera_thread.frameReady.connect(self.update_frame)
+        self.camera_thread.statusUpdate.connect(self.handle_camera_status)
         self.current_class = ""
         self.dataset_path = Path("data/raw")
         self.session_manager = SessionManager(self.dataset_path)
         self.settings = QSettings(ORGANIZATION, APP_NAME)
         
+        # Timer for UI updates like FPS
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_fps)
+
         # Statistics
         self.session_count = 0
         self.class_counts = {}
@@ -353,14 +452,19 @@ class AIScaleDataCollector(QMainWindow):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
 
-        settings_action = QAction("Camera Settings...", self)
+        # Add Camera Settings Dialog
+        settings_action = QAction("Camera &Settings", self)
         settings_action.triggered.connect(self.show_camera_settings)
         file_menu.addAction(settings_action)
-
+        
+        # Add a "Validate Dataset" action
+        validate_action = QAction("&Validate Dataset", self)
+        validate_action.triggered.connect(self.run_quick_validation)
+        file_menu.addAction(validate_action)
+        
         file_menu.addSeparator()
-
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
+        
+        exit_action = QAction("E&xit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
@@ -368,73 +472,107 @@ class AIScaleDataCollector(QMainWindow):
         """Shows a dialog to select the camera."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Camera Settings")
+        layout = QGridLayout()
         
-        layout = QVBoxLayout()
-        
-        layout.addWidget(QLabel("Select active camera:"))
-        
+        # --- Camera Selection ---
+        layout.addWidget(QLabel("Select Camera:"), 0, 0)
         camera_combo = QComboBox()
         self.populate_camera_list(camera_combo)
-        layout.addWidget(camera_combo)
+        layout.addWidget(camera_combo, 0, 1)
+
+        # Connect the signal AFTER populating
+        camera_combo.currentIndexChanged.connect(self.switch_camera)
         
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        # --- Buttons ---
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
+        layout.addWidget(button_box, 2, 0, 1, 2)
         
         dialog.setLayout(layout)
-        
-        if dialog.exec() == QDialog.Accepted:
-            selected_index = camera_combo.currentIndex()
-            self.switch_camera(selected_index)
+        dialog.exec()
 
-    def populate_camera_list(self, combo_box):
-        """Finds and lists all available cameras in the provided combo box."""
-        combo_box.clear()
-        
-        self.status_bar.showMessage("Finding cameras...")
-        QApplication.processEvents()
+    def run_quick_validation(self):
+        """Runs the quick validation script and displays a report in a dialog."""
+        self.status_bar.showMessage("Running validation...", 3000)
+        QApplication.processEvents()  # Ensure the message is shown immediately
 
-        self.available_cameras = []
-        for i in range(5):
-            cap = cv2.VideoCapture(i, CAMERA_BACKEND)
+        try:
+            report = quick_validate_dataset(self.dataset_path)
+            dialog = ValidationReportDialog(report, self)
+            dialog.exec()
+            self.status_bar.showMessage("Validation complete.", 3000)
+        except Exception as e:
+            logger.error(f"Failed to run validation script: {e}", exc_info=True)
+            QMessageBox.critical(
+                self, 
+                "Validation Error", 
+                f"Could not run the validation script.\n\nError: {e}"
+            )
+
+    def list_available_cameras(self) -> List[Tuple[int, str]]:
+        """Detects and lists available cameras, returning their index and a basic name."""
+        available_cameras = []
+        logger.info("Searching for available cameras...")
+        # Check first 10 indices, which is plenty for most systems.
+        for i in range(10):
+            cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
             if cap.isOpened():
-                self.available_cameras.append(i)
-                try:
-                    backend_name = cap.getBackendName()
-                    combo_box.addItem(f"Camera {i} ({backend_name})")
-                except Exception:
-                    combo_box.addItem(f"Camera {i}")
+                # On macOS, we can't get a device name easily, so we just name them generically.
+                available_cameras.append((i, f"Camera {i}"))
+                logger.info(f"Found usable camera at index {i}")
                 cap.release()
         
-        current_camera_index = self.settings.value("camera_index", 0, type=int)
+        if not available_cameras:
+            logger.warning("No cameras found by OpenCV.")
+        return available_cameras
+
+    def populate_camera_list(self, combo_box):
+        """Populates the given QComboBox with available cameras."""
+        combo_box.clear()
+        self.available_cameras = self.list_available_cameras()
         
-        if current_camera_index in self.available_cameras:
-            ui_index = self.available_cameras.index(current_camera_index)
-            combo_box.setCurrentIndex(ui_index)
-
-        self.status_bar.clearMessage()
-
-    def switch_camera(self, ui_index):
-        """Stops the current camera and starts the selected one."""
-        if not hasattr(self, 'available_cameras') or ui_index >= len(self.available_cameras):
+        if not self.available_cameras:
+            combo_box.addItem("No cameras found")
+            combo_box.setEnabled(False)
             return
 
-        camera_device_index = self.available_cameras[ui_index]
-        self.settings.setValue("camera_index", camera_device_index)
+        for index, name in self.available_cameras:
+            combo_box.addItem(name, userData=index)
+            
+        # Try to restore the last used camera index
+        last_cam_index = self.settings.value("last_camera_index", 0, type=int)
+        
+        # Find the corresponding item in the combobox
+        for i in range(combo_box.count()):
+            if combo_box.itemData(i) == last_cam_index:
+                combo_box.setCurrentIndex(i)
+                break
 
-        self.status_bar.showMessage(f"Switching to Camera {camera_device_index}...")
+    def switch_camera(self, ui_index):
+        """Switches the camera feed to the selected device."""
+        if not self.available_cameras or ui_index < 0:
+            return
+
+        # Get the actual camera index from the combobox userData
+        camera_index = self.camera_combo.itemData(ui_index)
+        
+        if camera_index is None:
+            return
+            
+        logger.info(f"Switching to camera index: {camera_index}")
+        
+        # Stop the current camera thread
         self.camera_thread.stop()
-        if self.camera_thread.initialize_camera(camera_device_index):
+        
+        # Re-initialize and start with the new index
+        if self.camera_thread.initialize_camera(camera_index):
             self.start_camera_feed()
-            self.status_bar.showMessage("Camera switched successfully.", 3000)
+            self.settings.setValue("last_camera_index", camera_index)
         else:
-            self.camera_label.setText("Failed to switch camera.")
-            self.camera_label.setStyleSheet("background-color: #000; color: #FFF;")
-            QMessageBox.warning(self, "Camera Error", f"Could not open Camera {camera_device_index}.")
+            self.handle_camera_status(f"Failed to switch to Camera {camera_index}", "error")
 
     def create_camera_section(self, parent_layout):
-        """Create large, prominent camera view"""
+        """Creates the main camera view and its associated controls."""
         # Camera container
         camera_container = QWidget()
         camera_layout = QVBoxLayout(camera_container)
@@ -442,106 +580,81 @@ class AIScaleDataCollector(QMainWindow):
         camera_layout.setSpacing(12)
         
         # Camera display
-        self.camera_label = QLabel()
-        self.camera_label.setMinimumSize(800, 500)
-        self.camera_label.setStyleSheet("""
+        self.camera_view = QLabel("Initializing Camera...")
+        self.camera_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.camera_view.setStyleSheet("""
             QLabel {
-                background-color: #000000;
-                border-radius: 12px;
-                border: 2px solid #E5E5EA;
+                background-color: black;
+                border: 1px solid #444;
+                border-radius: 8px;
+                color: white;
             }
         """)
-        self.camera_label.setAlignment(Qt.AlignCenter)
-        self.camera_label.setScaledContents(False)
-        camera_layout.addWidget(self.camera_label)
-        
-        # Simple camera info bar
-        info_layout = QHBoxLayout()
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        
+        self.camera_view.setMinimumSize(640, 480)
+        camera_layout.addWidget(self.camera_view, 1) # Add stretch factor of 1
+
+        # Status bar for FPS and Resolution
+        status_layout = QHBoxLayout()
         self.fps_label = QLabel("FPS: --")
-        self.fps_label.setStyleSheet("""
-            QLabel {
-                color: #8E8E93;
-                font-size: 13px;
-                font-weight: 500;
-            }
-        """)
-        info_layout.addWidget(self.fps_label)
-        
-        info_layout.addStretch()
-        
         self.resolution_label = QLabel("Resolution: --")
-        self.resolution_label.setStyleSheet("""
-            QLabel {
-                color: #8E8E93;
-                font-size: 13px;
-                font-weight: 500;
-            }
-        """)
-        info_layout.addWidget(self.resolution_label)
+        status_layout.addWidget(self.fps_label)
+        status_layout.addStretch()
+        status_layout.addWidget(self.resolution_label)
+        camera_layout.addLayout(status_layout)
         
-        camera_layout.addLayout(info_layout)
-        parent_layout.addWidget(camera_container)
+        parent_layout.addWidget(camera_container, 5) # Give more stretch factor
         
     def create_simple_controls(self, parent_layout):
         """Create simplified and aligned controls section using a grid."""
-        controls_container = QWidget()
-        layout = QGridLayout(controls_container)
-        layout.setSpacing(15)
-        layout.setContentsMargins(0, 10, 0, 0)
-
-        # --- Column 0 & 1: Produce Selection ---
-        produce_label = QLabel("Produce Type:")
-        produce_label.setStyleSheet("font-weight: 600;")
-        layout.addWidget(produce_label, 0, 0, 1, 2) # Span 2 columns for the label
-
-        self.class_combo = QComboBox()
-        self.class_combo.setMinimumWidth(220)
-        self.class_combo.setPlaceholderText("Select produce type...")
-        self.class_combo.currentTextChanged.connect(self.on_class_changed)
-        layout.addWidget(self.class_combo, 1, 0)
-
-        add_btn = QPushButton("+ Add New")
-        add_btn.clicked.connect(self.show_add_class_dialog)
-        layout.addWidget(add_btn, 1, 1)
+        controls_layout = QVBoxLayout()
+        controls_grid = QGridLayout()
         
-        # --- Column 2: Spacer ---
-        layout.setColumnStretch(2, 1)
+        # --- Camera Selection ---
+        controls_grid.addWidget(QLabel("Camera:"), 0, 0)
+        self.camera_combo = QComboBox()
+        # We will populate this in setup_camera after the UI is built
+        controls_grid.addWidget(self.camera_combo, 0, 1, 1, 2)
 
-        # --- Column 3: Info & Settings ---
-        session_label = QLabel("Session:")
-        session_label.setStyleSheet("font-weight: 600;")
-        layout.addWidget(session_label, 0, 3)
+        # --- Produce Selection ---
+        controls_grid.addWidget(QLabel("Produce Type:"), 1, 0)
+        self.class_selector = QComboBox()
+        self.class_selector.setPlaceholderText("Select produce type...")
+        self.class_selector.currentIndexChanged.connect(
+            lambda: self.on_class_changed(self.class_selector.currentText())
+        )
+        controls_grid.addWidget(self.class_selector, 1, 1)
 
-        self.session_info_label = QLabel("No captures yet")
-        self.session_info_label.setStyleSheet("color: #8E8E93;")
-        layout.addWidget(self.session_info_label, 1, 3)
+        self.add_class_button = QPushButton("+ Add New")
+        self.add_class_button.clicked.connect(self.show_add_class_dialog)
+        controls_grid.addWidget(self.add_class_button, 1, 2)
+        
+        # Set column stretch for a balanced layout
+        controls_grid.setColumnStretch(1, 2)
+        controls_grid.setColumnStretch(2, 1)
 
-        # --- Column 5: Capture Button ---
+        # --- Capture Button ---
+        capture_box = QHBoxLayout()
         self.capture_button = QPushButton("Capture Image")
-        self.capture_button.setMinimumHeight(55) # Match other controls height
-        self.capture_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007AFF;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QPushButton:hover { background-color: #0056CC; }
-            QPushButton:pressed { background-color: #004499; }
-            QPushButton:disabled {
-                background-color: #E5E5EA;
-                color: #8E8E93;
-            }
-        """)
         self.capture_button.clicked.connect(self.capture_image)
-        self.capture_button.setEnabled(False)
-        layout.addWidget(self.capture_button, 0, 5, 2, 1) # Span 2 rows
-        
-        # --- Final Stretch ---
-        layout.setColumnStretch(6, 1)
+        self.capture_button.setStyleSheet("padding: 10px;")
+        self.capture_button.setMinimumHeight(40)
+        self.capture_button.setEnabled(False) # Disabled until class is selected
+        capture_box.addWidget(self.capture_button)
 
-        parent_layout.addWidget(controls_container)
+        # --- Session Info ---
+        session_info_box = QVBoxLayout()
+        session_info_box.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.session_label = QLabel("<b>Session:</b> No captures yet")
+        self.session_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        session_info_box.addWidget(self.session_label)
+
+        controls_layout.addLayout(controls_grid)
+        controls_layout.addStretch()
+        controls_layout.addLayout(capture_box)
+        controls_layout.addLayout(session_info_box)
+        controls_layout.addStretch()
+
+        parent_layout.addLayout(controls_layout, 2) # Give less stretch factor
         
     def create_minimal_status_bar(self):
         """Create minimal status bar"""
@@ -589,9 +702,9 @@ class AIScaleDataCollector(QMainWindow):
                 self.load_classes()
                 
                 # Select new class
-                index = self.class_combo.findText(class_name)
+                index = self.class_selector.findText(class_name)
                 if index >= 0:
-                    self.class_combo.setCurrentIndex(index)
+                    self.class_selector.setCurrentIndex(index)
                     
                 self.status_bar.showMessage(f"Added: {class_name}", 3000)
                 
@@ -641,7 +754,7 @@ class AIScaleDataCollector(QMainWindow):
             filename = Path(result).name
             self.session_count += 1
             self.session_counter.setText(f"Captures: {self.session_count}")
-            self.session_info_label.setText(f"{self.session_count} images captured")
+            self.session_label.setText(f"<b>Session:</b> {self.session_count} captures")
             
             if metadata:
                 self.session_manager.add_capture(metadata)
@@ -666,10 +779,10 @@ class AIScaleDataCollector(QMainWindow):
         
         # Create pixmap and scale
         pixmap = QPixmap.fromImage(q_image)
-        scaled = pixmap.scaled(self.camera_label.size(),
+        scaled = pixmap.scaled(self.camera_view.size(),
                               Qt.KeepAspectRatio,
                               Qt.SmoothTransformation)
-        self.camera_label.setPixmap(scaled)
+        self.camera_view.setPixmap(scaled)
         
         # Update resolution
         self.resolution_label.setText(f"Resolution: {width}x{height}")
@@ -686,45 +799,47 @@ class AIScaleDataCollector(QMainWindow):
             shortcut.activated.connect(callback)
             
     def load_classes(self):
-        """Load produce classes"""
-        try:
-            self.dataset_path.mkdir(parents=True, exist_ok=True)
-            
-            classes = []
-            for item in self.dataset_path.iterdir():
-                if item.is_dir() and not item.name.startswith('.') and item.name != 'sessions':
-                    classes.append(item.name)
-                    
-            self.class_combo.clear()
-            self.class_combo.addItems(sorted(classes))
-            
-        except Exception as e:
-            self.status_bar.showMessage(f"Error loading classes: {str(e)}", 5000)
-            
+        self.class_selector.clear()
+        self.class_selector.addItem("Select produce type...")
+        
+        data_path = Path('data/raw')
+        if not data_path.exists():
+            return
+
+        # Filter for directories only and exclude common non-class dirs
+        excluded_dirs = {'sessions', '__pycache__', '.DS_Store'}
+        classes = sorted([d.name for d in data_path.iterdir() if d.is_dir() and d.name not in excluded_dirs])
+        
+        self.class_selector.addItems(classes)
+
     def setup_camera(self):
-        """Initialize camera with status updates using the saved index."""
-        self.camera_thread.statusUpdate.connect(self.handle_camera_status)
+        """Initializes and configures the camera and related UI elements."""
+        self.populate_camera_list(self.camera_combo)
+        self.camera_combo.currentIndexChanged.connect(self.switch_camera)
         
-        camera_index = self.settings.value("camera_index", 0, type=int)
-        
-        if not self.camera_thread.initialize_camera(camera_index):
-            QMessageBox.critical(self, "Camera Error", 
-                               "Could not initialize camera.\n"
-                               "Please check connection or select a different camera in File -> Camera Settings.")
-            
+        # Automatically start with the default (or last used) camera
+        if self.available_cameras:
+            initial_cam_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
+            if self.camera_thread.initialize_camera(initial_cam_index):
+                self.start_camera_feed()
+            else:
+                self.handle_camera_status("Failed to initialize the default camera.", "error")
+        else:
+            self.handle_camera_status("No cameras found.", "error")
+            # Disable camera-dependent UI
+            self.capture_button.setEnabled(False)
+            self.camera_view.setText("No Camera Detected")
+
+
     def start_camera_feed(self):
-        """Connect signals and start the camera thread"""
-        self.camera_thread.frameReady.connect(self.update_frame)
-        self.camera_thread.start()
-        
-        # Setup FPS timer
-        if not hasattr(self, 'fps_timer'):
-            self.fps_timer = QTimer()
-            self.fps_timer.timeout.connect(self.update_fps)
-        self.fps_timer.start(1000)
-            
+        """Starts the camera thread if it's not already running."""
+        if not self.camera_thread.isRunning():
+            self.camera_thread.start()
+            self.update_timer.start(300) # Update FPS ~3 times/sec
+            logger.info("Camera thread started.")
+
     def handle_camera_status(self, message, severity):
-        """Handle camera status updates"""
+        """Display camera status messages to the user."""
         if severity == "error":
             self.status_bar.showMessage(f"❌ {message}", 5000)
         elif severity == "warning":
@@ -771,19 +886,21 @@ class AIScaleDataCollector(QMainWindow):
         event.accept()
 
 def main():
-    """Application entry point"""
+    """Main entry point for the application."""
+    # Run Qt plugin check for diagnostic purposes
+    check_qt_plugins()
+
     app = QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
     app.setOrganizationName(ORGANIZATION)
+    app.setApplicationName(APP_NAME)
     
-    # Set application style
-    app.setStyle("Fusion")
-    
-    # Create and show window
-    window = AIScaleDataCollector()
-    window.show()
-    
+    # Set a modern style if available
+    if "Fusion" in QStyleFactory.keys():
+        app.setStyle("Fusion")
+
+    main_win = AIScaleDataCollector()
+    main_win.show()
     sys.exit(app.exec())
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
