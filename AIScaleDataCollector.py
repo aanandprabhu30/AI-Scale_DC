@@ -347,25 +347,35 @@ class CameraControlsWidget(QWidget):
         layout.addWidget(self.wb_temp_slider, 5, 1)
         layout.addWidget(self.wb_temp_value, 5, 2)
         
+        # Add Tint control
+        layout.addWidget(QLabel("WB Tint:"), 6, 0)
+        self.wb_tint_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wb_tint_slider.setRange(-50, 50)
+        self.wb_tint_slider.setValue(0)
+        self.wb_tint_slider.valueChanged.connect(self.update_controls)
+        self.wb_tint_value = QLabel("0")
+        layout.addWidget(self.wb_tint_slider, 6, 1)
+        layout.addWidget(self.wb_tint_value, 6, 2)
+        
         # Exposure (repurposed as software brightness boost)
-        layout.addWidget(QLabel("Exposure Comp:"), 6, 0)
+        layout.addWidget(QLabel("Exposure Comp:"), 7, 0)
         self.exposure_slider = QSlider(Qt.Orientation.Horizontal)
         self.exposure_slider.setRange(-10, 10)
         self.exposure_slider.setValue(0)
         self.exposure_slider.valueChanged.connect(self.update_controls)
         self.exposure_value = QLabel("0")
-        layout.addWidget(self.exposure_slider, 6, 1)
-        layout.addWidget(self.exposure_value, 6, 2)
+        layout.addWidget(self.exposure_slider, 7, 1)
+        layout.addWidget(self.exposure_value, 7, 2)
         
         # Auto modes
         self.auto_exposure_cb = QCheckBox("Auto Exposure (N/A)")
         self.auto_exposure_cb.setEnabled(False)
-        layout.addWidget(self.auto_exposure_cb, 7, 0, 1, 2)
+        layout.addWidget(self.auto_exposure_cb, 8, 0, 1, 2)
         
         # Reset button
         reset_btn = QPushButton("Reset All")
         reset_btn.clicked.connect(self.reset_all)
-        layout.addWidget(reset_btn, 8, 0, 1, 3)
+        layout.addWidget(reset_btn, 9, 0, 1, 3)
         
         # Apply custom styling
         self.setStyleSheet("""
@@ -400,19 +410,23 @@ class CameraControlsWidget(QWidget):
         exposure = self.exposure_slider.value()
         auto_wb = self.wb_auto_cb.isChecked()
         wb_temp = self.wb_temp_slider.value()
+        wb_tint = self.wb_tint_slider.value()
 
         self.wb_temp_slider.setEnabled(not auto_wb)
+        self.wb_tint_slider.setEnabled(not auto_wb)
         
         self.brightness_value.setText(str(brightness))
         self.contrast_value.setText(str(contrast))
         self.saturation_value.setText(str(saturation))
         self.exposure_value.setText(str(exposure))
         self.wb_temp_value.setText(f"{wb_temp} K")
+        self.wb_tint_value.setText(str(wb_tint))
         
-        # Set hardware properties
+        # Set hardware properties (now software-based)
         self.camera_thread.set_hardware_controls(
             auto_wb=auto_wb,
-            wb_temp=wb_temp
+            wb_temp=wb_temp,
+            wb_tint=wb_tint
         )
         
         # Set software properties
@@ -430,7 +444,7 @@ class CameraControlsWidget(QWidget):
         self.exposure_slider.setValue(0)
         self.wb_auto_cb.setChecked(True)
         self.wb_temp_slider.setValue(4500)
-
+        self.wb_tint_slider.setValue(0)
 
 class HistogramWidget(QWidget):
     """Live histogram display for exposure monitoring"""
@@ -581,6 +595,15 @@ class CameraThread(QThread):
         self.sw_saturation = 0
         self.sw_exposure_comp = 0
         
+        # White balance values
+        self.auto_wb = True
+        self.manual_wb_temp = 5500  # Kelvin
+        self.wb_tint = 0  # Green-Magenta adjustment
+        
+        # White balance estimation state
+        self.wb_gains = np.array([1.0, 1.0, 1.0])  # BGR gains
+        self.wb_history = deque(maxlen=10)  # Temporal smoothing
+        
     def set_software_controls(self, brightness=None, contrast=None, saturation=None, exposure=None):
         """Update software control values."""
         if brightness is not None:
@@ -593,23 +616,135 @@ class CameraThread(QThread):
             # Map exposure slider (-10 to 10) to a brightness compensation
             self.sw_exposure_comp = exposure * 5
 
-    def set_hardware_controls(self, auto_wb=None, wb_temp=None):
-        """Set hardware-level camera controls if available."""
-        if not self.camera or not self.camera.isOpened():
-            return
+    def set_hardware_controls(self, auto_wb=None, wb_temp=None, wb_tint=None):
+        """Set white balance controls (software implementation)."""
+        if auto_wb is not None:
+            self.auto_wb = auto_wb
+        if wb_temp is not None:
+            self.manual_wb_temp = wb_temp
+        if wb_tint is not None:
+            self.wb_tint = wb_tint
+
+    def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Robust white balance estimation that handles backlighting.
+        Returns BGR gain values to neutralize color cast.
+        """
+        if frame is None or frame.size == 0:
+            return np.array([1.0, 1.0, 1.0])
         
         try:
-            if auto_wb is not None:
-                # Note: 1 for auto, 0 for manual.
-                self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0 if auto_wb else 0.0)
+            # Convert to float for precise calculations
+            img_float = frame.astype(np.float32) / 255.0
             
-            # Only set temp in manual mode, and if the auto mode was just turned off
-            if wb_temp is not None and not auto_wb:
-                self.camera.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
+            # 1. Create mask to exclude overexposed and underexposed regions
+            gray = cv2.cvtColor(img_float, cv2.COLOR_BGR2GRAY)
+            
+            # Exclude very bright pixels (>0.95) and very dark pixels (<0.05)
+            valid_mask = (gray > 0.05) & (gray < 0.95)
+            
+            # Also exclude pixels with any channel saturated
+            channel_mask = np.all((img_float > 0.02) & (img_float < 0.98), axis=2)
+            valid_mask = valid_mask & channel_mask
+            
+            # Ensure we have enough valid pixels
+            valid_pixel_ratio = np.sum(valid_mask) / valid_mask.size
+            if valid_pixel_ratio < 0.1:  # Less than 10% valid pixels
+                logger.warning("Too few valid pixels for white balance estimation")
+                return np.array([1.0, 1.0, 1.0])
+            
+            # 2. Method 1: Modified Grey World on valid pixels only
+            valid_pixels = img_float[valid_mask]
+            if valid_pixels.size > 0:
+                avg_bgr = np.mean(valid_pixels, axis=0)
+                # Avoid division by zero
+                avg_bgr = np.maximum(avg_bgr, 0.001)
+                gray_world_gains = 0.5 / avg_bgr  # Target middle gray
+            else:
+                gray_world_gains = np.array([1.0, 1.0, 1.0])
+            
+            # 3. Method 2: Detect near-white pixels in valid regions
+            brightness = np.sum(valid_pixels, axis=1) / 3.0
+            bright_mask = brightness > 0.6  # Reasonably bright pixels
+            
+            if np.sum(bright_mask) > 100:  # Need sufficient samples
+                bright_pixels = valid_pixels[bright_mask]
+                
+                # Find pixels with low color variance (likely white/gray)
+                pixel_std = np.std(bright_pixels, axis=1)
+                neutral_mask = pixel_std < 0.1
+                
+                if np.sum(neutral_mask) > 50:
+                    neutral_pixels = bright_pixels[neutral_mask]
+                    avg_neutral = np.mean(neutral_pixels, axis=0)
+                    avg_neutral = np.maximum(avg_neutral, 0.001)
+                    
+                    # White patch gains
+                    target_white = 0.9  # Not full white to avoid clipping
+                    white_patch_gains = target_white / avg_neutral
+                else:
+                    white_patch_gains = gray_world_gains
+            else:
+                white_patch_gains = gray_world_gains
+            
+            # 4. Combine methods with weighted average
+            # Give more weight to white patch if we found good neutral pixels
+            if 'neutral_pixels' in locals() and len(neutral_pixels) > 100:
+                combined_gains = 0.7 * white_patch_gains + 0.3 * gray_world_gains
+            else:
+                combined_gains = 0.3 * white_patch_gains + 0.7 * gray_world_gains
+            
+            # 5. Limit the gains to reasonable ranges
+            combined_gains = np.clip(combined_gains, 0.5, 2.0)
+            
+            # 6. Normalize gains to preserve overall brightness
+            gain_avg = np.mean(combined_gains)
+            if gain_avg > 0:
+                combined_gains = combined_gains / gain_avg
+            
+            return combined_gains
+            
         except Exception as e:
-            # Silently fail if property is not supported
-            # logger.warning(f"Could not set hardware WB property: {e}")
-            pass
+            logger.error(f"White balance estimation failed: {e}")
+            return np.array([1.0, 1.0, 1.0])
+
+    def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
+        """
+        Convert color temperature in Kelvin to RGB gains.
+        Based on Planckian locus approximation.
+        """
+        # Normalize temperature to 0-1 range (2000K to 10000K)
+        temp_norm = (kelvin - 2000) / 8000
+        temp_norm = np.clip(temp_norm, 0, 1)
+        
+        # Approximate RGB gains for different temperatures
+        # These values are empirically derived for typical cameras
+        if kelvin < 5000:  # Warm (reddish)
+            r_gain = 1.0
+            g_gain = 0.8 + 0.2 * (kelvin - 2000) / 3000
+            b_gain = 0.5 + 0.5 * (kelvin - 2000) / 3000
+        elif kelvin > 6500:  # Cool (bluish)
+            r_gain = 1.0 - 0.3 * (kelvin - 6500) / 3500
+            g_gain = 1.0 - 0.1 * (kelvin - 6500) / 3500
+            b_gain = 1.0
+        else:  # Neutral range
+            r_gain = 1.0
+            g_gain = 1.0
+            b_gain = 1.0
+        
+        # Convert to BGR order and normalize
+        gains = np.array([b_gain, g_gain, r_gain])
+        return gains / np.mean(gains)
+
+    def _apply_tint_adjustment(self, gains: np.ndarray, tint: float) -> np.ndarray:
+        """Apply green-magenta tint adjustment to gains."""
+        # Tint adjustment primarily affects green channel
+        # Positive tint = more magenta (less green)
+        # Negative tint = more green
+        tint_factor = 1.0 - (tint / 200.0)  # Scale tint to reasonable range
+        adjusted_gains = gains.copy()
+        adjusted_gains[1] *= tint_factor  # Adjust green channel
+        return adjusted_gains / np.mean(adjusted_gains)  # Renormalize
 
     def initialize_camera(self, index=0) -> bool:
         """Initialize camera with robust error handling, aiming for 8MP resolution."""
@@ -702,36 +837,60 @@ class CameraThread(QThread):
             time.sleep(0.016)  # Target ~60Hz update rate
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Apply all software image processing steps."""
+        """Apply all software image processing steps with robust white balance."""
         if frame is None:
             return None
         
         try:
-            # 1. Brightness / Contrast (Software)
+            # 1. White Balance Correction (do this first!)
+            if self.auto_wb:
+                # Estimate white balance from frame
+                new_gains = self._estimate_white_balance(frame)
+                
+                # Temporal smoothing
+                self.wb_history.append(new_gains)
+                if len(self.wb_history) > 3:
+                    # Use median for robustness against outliers
+                    smoothed_gains = np.median(list(self.wb_history), axis=0)
+                else:
+                    smoothed_gains = new_gains
+                
+                self.wb_gains = smoothed_gains
+            else:
+                # Manual white balance
+                self.wb_gains = self._kelvin_to_rgb_gains(self.manual_wb_temp)
+                self.wb_gains = self._apply_tint_adjustment(self.wb_gains, self.wb_tint)
+            
+            # Apply white balance gains
+            balanced_frame = frame.astype(np.float32)
+            for i in range(3):  # BGR channels
+                balanced_frame[:, :, i] *= self.wb_gains[i]
+            
+            # Clip to valid range
+            balanced_frame = np.clip(balanced_frame, 0, 255).astype(np.uint8)
+            
+            # 2. Brightness / Contrast adjustments
             brightness = self.sw_brightness + self.sw_exposure_comp
-            # Map contrast from -100..100 to a multiplicative factor 0..2
             contrast_alpha = 1.0 + (self.sw_contrast / 100.0)
             
-            adjusted_frame = cv2.convertScaleAbs(frame, alpha=contrast_alpha, beta=brightness)
+            adjusted_frame = cv2.convertScaleAbs(balanced_frame, alpha=contrast_alpha, beta=brightness)
             
-            # 2. Saturation (Software)
+            # 3. Saturation adjustment
             if self.sw_saturation != 0:
-                hsv = cv2.cvtColor(adjusted_frame, cv2.COLOR_BGR2HSV)
-                h, s, v = cv2.split(hsv)
+                hsv = cv2.cvtColor(adjusted_frame, cv2.COLOR_BGR2HSV).astype(np.float32)
                 
-                # Map saturation from -100..100 to a factor 0..2
+                # Adjust saturation
                 saturation_factor = 1.0 + (self.sw_saturation / 100.0)
+                hsv[:, :, 1] *= saturation_factor
+                hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0, 255)
                 
-                # Using convertScaleAbs for safe scaling and clipping
-                s = cv2.convertScaleAbs(s, alpha=saturation_factor, beta=0)
-                
-                final_hsv = cv2.merge([h, s, v])
-                adjusted_frame = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
-
+                adjusted_frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+            
             return adjusted_frame
+            
         except Exception as e:
-            logger.error(f"Software frame processing failed: {e}")
-            return frame # Return original frame on error
+            logger.error(f"Frame processing failed: {e}")
+            return frame  # Return original frame on error
 
     def capture_image(self, quality="high") -> Optional[np.ndarray]:
         """
