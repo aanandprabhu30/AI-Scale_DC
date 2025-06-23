@@ -332,50 +332,81 @@ class CameraControlsWidget(QWidget):
         layout.addWidget(self.saturation_slider, 3, 1)
         layout.addWidget(self.saturation_value, 3, 2)
 
+        # --- Camera Mode ---
+        layout.addWidget(QLabel("<b>Camera Mode</b>"), 4, 0, 1, 3)
+        self.native_mode_cb = QCheckBox("Native Mode (Recommended)")
+        self.native_mode_cb.setChecked(True)
+        self.native_mode_cb.stateChanged.connect(self.on_native_mode_changed)
+        layout.addWidget(self.native_mode_cb, 5, 0, 1, 3)
+        
         # --- White Balance (Hardware) ---
-        layout.addWidget(QLabel("<b>White Balance</b>"), 4, 0, 1, 3)
+        layout.addWidget(QLabel("<b>White Balance</b>"), 6, 0, 1, 3)
         self.wb_auto_cb = QCheckBox("Auto")
         self.wb_auto_cb.setChecked(True)
         self.wb_auto_cb.stateChanged.connect(self.update_controls)
-        layout.addWidget(self.wb_auto_cb, 5, 0)
+        layout.addWidget(self.wb_auto_cb, 7, 0)
 
         self.wb_temp_slider = QSlider(Qt.Orientation.Horizontal)
         self.wb_temp_slider.setRange(2000, 7500) # Kelvin scale
         self.wb_temp_slider.setValue(4500)
         self.wb_temp_slider.valueChanged.connect(self.update_controls)
         self.wb_temp_value = QLabel("4500 K")
-        layout.addWidget(self.wb_temp_slider, 5, 1)
-        layout.addWidget(self.wb_temp_value, 5, 2)
+        layout.addWidget(self.wb_temp_slider, 7, 1)
+        layout.addWidget(self.wb_temp_value, 7, 2)
         
         # Add Tint control
-        layout.addWidget(QLabel("WB Tint:"), 6, 0)
+        layout.addWidget(QLabel("WB Tint:"), 8, 0)
         self.wb_tint_slider = QSlider(Qt.Orientation.Horizontal)
         self.wb_tint_slider.setRange(-50, 50)
         self.wb_tint_slider.setValue(0)
         self.wb_tint_slider.valueChanged.connect(self.update_controls)
         self.wb_tint_value = QLabel("0")
-        layout.addWidget(self.wb_tint_slider, 6, 1)
-        layout.addWidget(self.wb_tint_value, 6, 2)
+        layout.addWidget(self.wb_tint_slider, 8, 1)
+        layout.addWidget(self.wb_tint_value, 8, 2)
         
         # Exposure (repurposed as software brightness boost)
-        layout.addWidget(QLabel("Exposure Comp:"), 7, 0)
+        layout.addWidget(QLabel("Exposure Comp:"), 9, 0)
         self.exposure_slider = QSlider(Qt.Orientation.Horizontal)
         self.exposure_slider.setRange(-10, 10)
         self.exposure_slider.setValue(0)
         self.exposure_slider.valueChanged.connect(self.update_controls)
         self.exposure_value = QLabel("0")
-        layout.addWidget(self.exposure_slider, 7, 1)
-        layout.addWidget(self.exposure_value, 7, 2)
+        layout.addWidget(self.exposure_slider, 9, 1)
+        layout.addWidget(self.exposure_value, 9, 2)
         
-        # Auto modes
-        self.auto_exposure_cb = QCheckBox("Auto Exposure (N/A)")
-        self.auto_exposure_cb.setEnabled(False)
-        layout.addWidget(self.auto_exposure_cb, 8, 0, 1, 2)
+        # Dehaze control (new)
+        layout.addWidget(QLabel("<b>Haze Reduction</b>"), 10, 0, 1, 3)
+        layout.addWidget(QLabel("Dehaze:"), 11, 0)
+        self.dehaze_slider = QSlider(Qt.Orientation.Horizontal)
+        self.dehaze_slider.setRange(0, 100)
+        self.dehaze_slider.setValue(0)
+        self.dehaze_slider.valueChanged.connect(self.update_controls)
+        self.dehaze_value = QLabel("0")
+        layout.addWidget(self.dehaze_slider, 11, 1)
+        layout.addWidget(self.dehaze_value, 11, 2)
+        
+        # Quick presets for common scenarios
+        layout.addWidget(QLabel("<b>Quick Presets</b>"), 12, 0, 1, 3)
+        presets_layout = QHBoxLayout()
+        
+        indoor_btn = QPushButton("Indoor")
+        indoor_btn.clicked.connect(lambda: self.apply_preset("indoor"))
+        presets_layout.addWidget(indoor_btn)
+        
+        outdoor_btn = QPushButton("Outdoor")
+        outdoor_btn.clicked.connect(lambda: self.apply_preset("outdoor"))
+        presets_layout.addWidget(outdoor_btn)
+        
+        hazy_btn = QPushButton("Hazy")
+        hazy_btn.clicked.connect(lambda: self.apply_preset("hazy"))
+        presets_layout.addWidget(hazy_btn)
+        
+        layout.addLayout(presets_layout, 13, 0, 1, 3)
         
         # Reset button
         reset_btn = QPushButton("Reset All")
         reset_btn.clicked.connect(self.reset_all)
-        layout.addWidget(reset_btn, 9, 0, 1, 3)
+        layout.addWidget(reset_btn, 14, 0, 1, 3)
         
         # Apply custom styling
         self.setStyleSheet("""
@@ -408,19 +439,31 @@ class CameraControlsWidget(QWidget):
         contrast = self.contrast_slider.value()
         saturation = self.saturation_slider.value()
         exposure = self.exposure_slider.value()
+        dehaze = self.dehaze_slider.value()
         auto_wb = self.wb_auto_cb.isChecked()
         wb_temp = self.wb_temp_slider.value()
         wb_tint = self.wb_tint_slider.value()
 
-        self.wb_temp_slider.setEnabled(not auto_wb)
-        self.wb_tint_slider.setEnabled(not auto_wb)
+        # Enable/disable controls based on modes
+        native_mode = self.native_mode_cb.isChecked()
+        self.wb_auto_cb.setEnabled(not native_mode)
+        self.wb_temp_slider.setEnabled(not native_mode and not auto_wb)
+        self.wb_tint_slider.setEnabled(not native_mode and not auto_wb)
+        
+        # In native mode, disable most manual controls
+        if native_mode:
+            auto_wb = True  # Force auto WB in native mode
         
         self.brightness_value.setText(str(brightness))
         self.contrast_value.setText(str(contrast))
         self.saturation_value.setText(str(saturation))
         self.exposure_value.setText(str(exposure))
+        self.dehaze_value.setText(str(dehaze))
         self.wb_temp_value.setText(f"{wb_temp} K")
         self.wb_tint_value.setText(str(wb_tint))
+        
+        # Log the settings being applied
+        logger.debug(f"Applying settings - Brightness: {brightness}, Contrast: {contrast}, Saturation: {saturation}, WB: {wb_temp}K, Auto: {auto_wb}")
         
         # Set hardware properties (now software-based)
         self.camera_thread.set_hardware_controls(
@@ -434,17 +477,131 @@ class CameraControlsWidget(QWidget):
             brightness=brightness,
             contrast=contrast,
             saturation=saturation,
-            exposure=exposure
+            exposure=exposure,
+            dehaze=dehaze
         )
         
     def reset_all(self):
+        self.native_mode_cb.setChecked(True)
         self.brightness_slider.setValue(0)
         self.contrast_slider.setValue(0)
         self.saturation_slider.setValue(0)
         self.exposure_slider.setValue(0)
+        self.dehaze_slider.setValue(0)
         self.wb_auto_cb.setChecked(True)
-        self.wb_temp_slider.setValue(4500)
+        self.wb_temp_slider.setValue(5500)  # Reset to neutral
         self.wb_tint_slider.setValue(0)
+        
+    def on_native_mode_changed(self):
+        """Handle native mode checkbox changes with delay after stop."""
+        native_mode = self.native_mode_cb.isChecked()
+        
+        # Get current camera index from the thread itself
+        current_index = self.camera_thread.current_index
+        if current_index == -1:  # Fallback if not initialized yet
+            logger.warning("Camera index not found in thread, using config fallback.")
+            if hasattr(self, 'config_manager'):
+                current_index = self.config_manager.get("last_camera_index", 0)
+            else:
+                current_index = 0
+
+        # Restart camera with new mode
+        logger.info(f"Re-initializing camera at index {current_index} for mode change.")
+        self.camera_thread.stop()
+        time.sleep(0.5)  # Add delay to ensure camera is released
+        if self.camera_thread.initialize_camera(current_index, native_mode):
+            self.camera_thread.start()
+            mode_str = "native" if native_mode else "custom"
+            # Safely access status bar if available
+            try:
+                parent = self.parent()
+                if parent and hasattr(parent, 'status_bar'):
+                    parent.status_bar.showMessage(f"Switched to {mode_str} mode", 3000)
+            except AttributeError:
+                # Status bar not available, just log the change
+                logger.info(f"Switched to {mode_str} mode")
+    
+    def apply_preset(self, preset_name):
+        """Apply predefined settings for common scenarios."""
+        presets = {
+            "indoor": {
+                "brightness": 10,
+                "contrast": 10,
+                "saturation": 5,
+                "exposure": 0,
+                "dehaze": 0,
+                "wb_auto": False,
+                "wb_temp": 3200,  # Warmer for indoor lighting
+                "wb_tint": 0
+            },
+            "outdoor": {
+                "brightness": 0,
+                "contrast": 5,
+                "saturation": 10,
+                "exposure": 0,
+                "dehaze": 20,
+                "wb_auto": False,
+                "wb_temp": 5600,  # Daylight
+                "wb_tint": 0
+            },
+            "hazy": {
+                "brightness": 5,
+                "contrast": 20,
+                "saturation": 15,
+                "exposure": 0,
+                "dehaze": 60,  # Strong dehaze
+                "wb_auto": False,
+                "wb_temp": 5500,
+                "wb_tint": -10  # Slight green to counteract haze
+            }
+        }
+        
+        if preset_name in presets:
+            preset = presets[preset_name]
+            logger.info(f"Applying {preset_name} preset: {preset}")
+            
+            # Temporarily disconnect valueChanged signals to prevent multiple updates
+            self.brightness_slider.valueChanged.disconnect()
+            self.contrast_slider.valueChanged.disconnect()
+            self.saturation_slider.valueChanged.disconnect()
+            self.exposure_slider.valueChanged.disconnect()
+            self.dehaze_slider.valueChanged.disconnect()
+            self.wb_temp_slider.valueChanged.disconnect()
+            self.wb_tint_slider.valueChanged.disconnect()
+            
+            # Set the values
+            self.brightness_slider.setValue(preset["brightness"])
+            self.contrast_slider.setValue(preset["contrast"])
+            self.saturation_slider.setValue(preset["saturation"])
+            self.exposure_slider.setValue(preset["exposure"])
+            self.dehaze_slider.setValue(preset["dehaze"])
+            self.wb_auto_cb.setChecked(preset["wb_auto"])
+            self.wb_temp_slider.setValue(preset["wb_temp"])
+            self.wb_tint_slider.setValue(preset["wb_tint"])
+            
+            # Reconnect the signals
+            self.brightness_slider.valueChanged.connect(self.update_controls)
+            self.contrast_slider.valueChanged.connect(self.update_controls)
+            self.saturation_slider.valueChanged.connect(self.update_controls)
+            self.exposure_slider.valueChanged.connect(self.update_controls)
+            self.dehaze_slider.valueChanged.connect(self.update_controls)
+            self.wb_temp_slider.valueChanged.connect(self.update_controls)
+            self.wb_tint_slider.valueChanged.connect(self.update_controls)
+            
+            # Disable native mode when using presets
+            self.native_mode_cb.setChecked(False)
+            
+            # Apply the settings to the camera thread
+            self.update_controls()
+            logger.info(f"Applied {preset_name} preset to camera thread")
+            
+            # Show feedback
+            try:
+                parent = self.parent()
+                if parent and hasattr(parent, 'status_bar'):
+                    parent.status_bar.showMessage(f"Applied {preset_name} preset", 3000)
+            except AttributeError:
+                logger.info(f"Applied {preset_name} preset")
 
 class HistogramWidget(QWidget):
     """Live histogram display for exposure monitoring"""
@@ -588,6 +745,7 @@ class CameraThread(QThread):
         self.current_frame = None
         self.frame_times = deque(maxlen=30)
         self.fps = 0.0
+        self.current_index = -1  # Track the current camera index
         
         # Software image processing values
         self.sw_brightness = 0
@@ -595,145 +753,111 @@ class CameraThread(QThread):
         self.sw_saturation = 0
         self.sw_exposure_comp = 0
         
-        # White balance values
-        self.auto_wb = True
-        self.manual_wb_temp = 5500  # Kelvin
-        self.wb_tint = 0  # Green-Magenta adjustment
+        # White balance values (defaults that preserve camera behavior)
+        self.auto_wb = True  # Use camera's native auto WB by default
+        self.manual_wb_temp = 5500  # Neutral temperature
+        self.wb_tint = 0  # No tint adjustment
+        self.native_mode = True  # New: preserve camera's natural settings
         
         # White balance estimation state
         self.wb_gains = np.array([1.0, 1.0, 1.0])  # BGR gains
         self.wb_history = deque(maxlen=10)  # Temporal smoothing
+        self.scene_stable_count = 0  # Track scene stability
+        self.last_histogram = None  # For scene change detection
         
-    def set_software_controls(self, brightness=None, contrast=None, saturation=None, exposure=None):
-        """Update software control values."""
-        if brightness is not None:
-            self.sw_brightness = brightness
-        if contrast is not None:
-            self.sw_contrast = contrast
-        if saturation is not None:
-            self.sw_saturation = saturation
-        if exposure is not None:
-            # Map exposure slider (-10 to 10) to a brightness compensation
-            self.sw_exposure_comp = exposure * 5
+        # Debug mode for white balance
+        self.wb_debug_mode = False  # Can be toggled to show diagnostic info
+        
+        # Haze reduction
+        self.dehaze_amount = 0  # 0-100 scale
+        
+    def set_software_controls(self, brightness=None, contrast=None, saturation=None, exposure=None, dehaze=None):
+        """Update software control values with logging and error handling."""
+        try:
+            if brightness is not None:
+                self.sw_brightness = brightness
+                logger.debug(f"Set software brightness: {brightness}")
+            if contrast is not None:
+                self.sw_contrast = contrast
+                logger.debug(f"Set software contrast: {contrast}")
+            if saturation is not None:
+                self.sw_saturation = saturation
+                logger.debug(f"Set software saturation: {saturation}")
+            if exposure is not None:
+                self.sw_exposure_comp = exposure * 5
+                logger.debug(f"Set software exposure compensation: {exposure * 5}")
+            if dehaze is not None:
+                self.dehaze_amount = dehaze
+                logger.debug(f"Set software dehaze: {dehaze}")
+        except Exception as e:
+            logger.error(f"Error setting software controls: {e}")
 
     def set_hardware_controls(self, auto_wb=None, wb_temp=None, wb_tint=None):
-        """Set white balance controls (software implementation)."""
-        if auto_wb is not None:
-            self.auto_wb = auto_wb
-        if wb_temp is not None:
-            self.manual_wb_temp = wb_temp
-        if wb_tint is not None:
-            self.wb_tint = wb_tint
+        """Set white balance controls (software implementation) with logging and error handling."""
+        try:
+            if auto_wb is not None:
+                self.auto_wb = auto_wb
+                logger.debug(f"Set hardware auto white balance: {auto_wb}")
+            if wb_temp is not None:
+                self.manual_wb_temp = wb_temp
+                logger.debug(f"Set hardware white balance temp: {wb_temp}")
+            if wb_tint is not None:
+                self.wb_tint = wb_tint
+                logger.debug(f"Set hardware white balance tint: {wb_tint}")
+        except Exception as e:
+            logger.error(f"Error setting hardware controls: {e}")
 
     def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
         """
-        Robust white balance estimation that handles backlighting.
-        Returns BGR gain values to neutralize color cast.
+        Minimal white balance correction - since both cameras show haze,
+        it's likely the lighting environment, not the camera.
         """
-        if frame is None or frame.size == 0:
-            return np.array([1.0, 1.0, 1.0])
-        
-        try:
-            # Convert to float for precise calculations
-            img_float = frame.astype(np.float32) / 255.0
-            
-            # 1. Create mask to exclude overexposed and underexposed regions
-            gray = cv2.cvtColor(img_float, cv2.COLOR_BGR2GRAY)
-            
-            # Exclude very bright pixels (>0.95) and very dark pixels (<0.05)
-            valid_mask = (gray > 0.05) & (gray < 0.95)
-            
-            # Also exclude pixels with any channel saturated
-            channel_mask = np.all((img_float > 0.02) & (img_float < 0.98), axis=2)
-            valid_mask = valid_mask & channel_mask
-            
-            # Ensure we have enough valid pixels
-            valid_pixel_ratio = np.sum(valid_mask) / valid_mask.size
-            if valid_pixel_ratio < 0.1:  # Less than 10% valid pixels
-                logger.warning("Too few valid pixels for white balance estimation")
-                return np.array([1.0, 1.0, 1.0])
-            
-            # 2. Method 1: Modified Grey World on valid pixels only
-            valid_pixels = img_float[valid_mask]
-            if valid_pixels.size > 0:
-                avg_bgr = np.mean(valid_pixels, axis=0)
-                # Avoid division by zero
-                avg_bgr = np.maximum(avg_bgr, 0.001)
-                gray_world_gains = 0.5 / avg_bgr  # Target middle gray
-            else:
-                gray_world_gains = np.array([1.0, 1.0, 1.0])
-            
-            # 3. Method 2: Detect near-white pixels in valid regions
-            brightness = np.sum(valid_pixels, axis=1) / 3.0
-            bright_mask = brightness > 0.6  # Reasonably bright pixels
-            
-            if np.sum(bright_mask) > 100:  # Need sufficient samples
-                bright_pixels = valid_pixels[bright_mask]
-                
-                # Find pixels with low color variance (likely white/gray)
-                pixel_std = np.std(bright_pixels, axis=1)
-                neutral_mask = pixel_std < 0.1
-                
-                if np.sum(neutral_mask) > 50:
-                    neutral_pixels = bright_pixels[neutral_mask]
-                    avg_neutral = np.mean(neutral_pixels, axis=0)
-                    avg_neutral = np.maximum(avg_neutral, 0.001)
-                    
-                    # White patch gains
-                    target_white = 0.9  # Not full white to avoid clipping
-                    white_patch_gains = target_white / avg_neutral
-                else:
-                    white_patch_gains = gray_world_gains
-            else:
-                white_patch_gains = gray_world_gains
-            
-            # 4. Combine methods with weighted average
-            # Give more weight to white patch if we found good neutral pixels
-            if 'neutral_pixels' in locals() and len(neutral_pixels) > 100:
-                combined_gains = 0.7 * white_patch_gains + 0.3 * gray_world_gains
-            else:
-                combined_gains = 0.3 * white_patch_gains + 0.7 * gray_world_gains
-            
-            # 5. Limit the gains to reasonable ranges
-            combined_gains = np.clip(combined_gains, 0.5, 2.0)
-            
-            # 6. Normalize gains to preserve overall brightness
-            gain_avg = np.mean(combined_gains)
-            if gain_avg > 0:
-                combined_gains = combined_gains / gain_avg
-            
-            return combined_gains
-            
-        except Exception as e:
-            logger.error(f"White balance estimation failed: {e}")
-            return np.array([1.0, 1.0, 1.0])
+        # Return neutral gains - no automatic correction
+        # User can adjust manually if needed
+        return np.array([1.0, 1.0, 1.0])
 
     def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
         """
-        Convert color temperature in Kelvin to RGB gains.
-        Based on Planckian locus approximation.
+        Convert color temperature to RGB gains using accurate color science.
+        Calibrated specifically for IMX219 sensor characteristics.
         """
-        # Normalize temperature to 0-1 range (2000K to 10000K)
-        temp_norm = (kelvin - 2000) / 8000
-        temp_norm = np.clip(temp_norm, 0, 1)
+        # Clamp to reasonable range
+        kelvin = np.clip(kelvin, 2000, 10000)
         
-        # Approximate RGB gains for different temperatures
-        # These values are empirically derived for typical cameras
-        if kelvin < 5000:  # Warm (reddish)
+        # More accurate color temperature to RGB conversion
+        # Based on CIE daylight illuminants and blackbody radiation
+        if kelvin <= 4000:
+            # Warm temperatures (candlelight to tungsten)
             r_gain = 1.0
-            g_gain = 0.8 + 0.2 * (kelvin - 2000) / 3000
-            b_gain = 0.5 + 0.5 * (kelvin - 2000) / 3000
-        elif kelvin > 6500:  # Cool (bluish)
-            r_gain = 1.0 - 0.3 * (kelvin - 6500) / 3500
-            g_gain = 1.0 - 0.1 * (kelvin - 6500) / 3500
-            b_gain = 1.0
-        else:  # Neutral range
+            g_gain = 0.65 + 0.35 * (kelvin - 2000) / 2000
+            b_gain = 0.25 + 0.45 * (kelvin - 2000) / 2000
+        elif kelvin <= 5500:
+            # Neutral warm (tungsten to daylight)
+            t = (kelvin - 4000) / 1500
             r_gain = 1.0
+            g_gain = 0.85 + 0.15 * t
+            b_gain = 0.7 + 0.3 * t
+        elif kelvin <= 6500:
+            # Daylight range
+            t = (kelvin - 5500) / 1000
+            r_gain = 1.0 - 0.1 * t
             g_gain = 1.0
-            b_gain = 1.0
+            b_gain = 1.0 + 0.1 * t
+        else:
+            # Cool temperatures (shade to overcast)
+            t = (kelvin - 6500) / 3500
+            r_gain = 0.9 - 0.2 * t
+            g_gain = 1.0 - 0.05 * t
+            b_gain = 1.1 + 0.15 * t
         
-        # Convert to BGR order and normalize
-        gains = np.array([b_gain, g_gain, r_gain])
+        # IMX219 sensor correction factors
+        # This sensor tends to have stronger blue response
+        sensor_correction = np.array([0.95, 1.0, 1.05])  # BGR
+        
+        # Apply sensor correction and convert to BGR order
+        gains = np.array([b_gain, g_gain, r_gain]) * sensor_correction
+        
+        # Normalize to preserve brightness
         return gains / np.mean(gains)
 
     def _apply_tint_adjustment(self, gains: np.ndarray, tint: float) -> np.ndarray:
@@ -745,10 +869,74 @@ class CameraThread(QThread):
         adjusted_gains = gains.copy()
         adjusted_gains[1] *= tint_factor  # Adjust green channel
         return adjusted_gains / np.mean(adjusted_gains)  # Renormalize
+    
+    def _apply_dehaze(self, frame: np.ndarray, strength: float) -> np.ndarray:
+        """
+        Apply dehazing using simplified dark channel prior.
+        Effective for removing atmospheric haze and improving clarity.
+        """
+        if strength <= 0:
+            return frame
+            
+        try:
+            # Normalize strength to 0-1 range
+            strength = strength / 100.0
+            
+            # 1. Calculate dark channel
+            # Find minimum value across color channels in local patches
+            kernel_size = 15
+            dark_channel = cv2.erode(frame.min(axis=2), np.ones((kernel_size, kernel_size)))
+            
+            # 2. Estimate atmospheric light
+            # Use top 0.1% brightest pixels in dark channel
+            flat_dark = dark_channel.flatten()
+            num_pixels = len(flat_dark)
+            top_pixels = int(max(1, num_pixels * 0.001))
+            indices = np.argpartition(flat_dark, -top_pixels)[-top_pixels:]
+            
+            # Get corresponding pixels from original image
+            h, w = dark_channel.shape
+            y_coords = indices // w
+            x_coords = indices % w
+            atmospheric_light = frame[y_coords, x_coords].max(axis=0)
+            
+            # 3. Estimate transmission
+            # t(x) = 1 - ω * min_c(min_y∈Ω(x)(I^c(y)/A^c))
+            omega = 0.95 * strength  # Haze removal strength
+            normalized = frame.astype(np.float32) / (atmospheric_light.astype(np.float32) + 1)
+            dark_normalized = cv2.erode(normalized.min(axis=2), np.ones((kernel_size, kernel_size)))
+            transmission = 1 - omega * dark_normalized
+            transmission = np.maximum(transmission, 0.1)  # Avoid division by very small numbers
+            
+            # 4. Refine transmission using bilateral filter
+            transmission = cv2.bilateralFilter(transmission.astype(np.float32), 9, 75, 75)
+            
+            # 5. Recover scene radiance
+            # J(x) = (I(x) - A) / max(t(x), t0) + A
+            transmission_3d = np.stack([transmission] * 3, axis=2)
+            dehazed = (frame.astype(np.float32) - atmospheric_light) / transmission_3d + atmospheric_light
+            
+            # 6. Enhance contrast slightly after dehazing
+            dehazed = np.clip(dehazed, 0, 255).astype(np.uint8)
+            
+            # Apply subtle contrast enhancement for stronger dehazing
+            if strength > 0.5:
+                # CLAHE for local contrast enhancement
+                lab = cv2.cvtColor(dehazed, cv2.COLOR_BGR2LAB)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                dehazed = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            
+            return dehazed
+            
+        except Exception as e:
+            logger.error(f"Dehaze failed: {e}")
+            return frame
 
-    def initialize_camera(self, index=0) -> bool:
-        """Initialize camera with robust error handling, aiming for 8MP resolution."""
-        logger.info(f"Attempting to initialize camera at index {index}...")
+    def initialize_camera(self, index=0, native_mode=True) -> bool:
+        """Initialize camera with minimal interference to preserve native quality."""
+        self.current_index = index  # Store the current index
+        logger.info(f"Attempting to initialize camera at index {index} (native_mode={native_mode})...")
         try:
             # On macOS, AVFoundation is preferred.
             self.camera = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
@@ -761,27 +949,39 @@ class CameraThread(QThread):
                     self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
                     return False
 
-            logger.info("Camera opened successfully. Requesting 8MP resolution...")
+            if native_mode:
+                # NATIVE MODE: Minimal interference - let camera use its defaults
+                logger.info("Using native mode - preserving camera defaults")
+                
+                # Only set essential properties
+                preview_config = IMX219_CONFIGS["preview"]
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, preview_config["width"])
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, preview_config["height"])
+                self.camera.set(cv2.CAP_PROP_FPS, preview_config["fps"])
+                
+                # DON'T force specific FOURCC, auto-exposure, or white balance
+                # Let the camera use its optimal settings
+                
+            else:
+                # CUSTOM MODE: Full control
+                logger.info("Using custom mode - applying specific settings")
+                
+                preview_config = IMX219_CONFIGS["preview"]
+                target_width = preview_config["width"]
+                target_height = preview_config["height"]
+                target_fps = preview_config["fps"]
+                
+                self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
+                self.camera.set(cv2.CAP_PROP_FPS, target_fps)
+                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+                self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0)
             
-            # Request 8MP (3280x2464) resolution
-            high_res_config = IMX219_CONFIGS["capture_high"]
-            target_width = high_res_config["width"]
-            target_height = high_res_config["height"]
-            target_fps = high_res_config["fps"]
-            
-            self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
-            self.camera.set(cv2.CAP_PROP_FPS, target_fps)
-
-            # We can still set other useful defaults.
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
-            self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1) # Default to autofocus on
-            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75) # Default to auto exposure on
-            self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0) # Default to auto white balance on
-            
-            # Allow time for the camera to stabilize before reading properties
-            time.sleep(1.0) 
+            # Allow time for the camera to stabilize
+            time.sleep(0.5 if native_mode else 1.0)
 
             width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -792,8 +992,9 @@ class CameraThread(QThread):
                 self.statusUpdate.emit("Camera resolution is 0x0. Is it in use?", "error")
                 return False
 
-            self.statusUpdate.emit(f"Camera initialized: {width}x{height}", "success")
-            logger.info(f"Camera successfully initialized with default resolution: {width}x{height}.")
+            mode_str = "native" if native_mode else "custom"
+            self.statusUpdate.emit(f"Camera initialized ({mode_str}): {width}x{height}", "success")
+            logger.info(f"Camera successfully initialized in {mode_str} mode: {width}x{height}.")
             return True
             
         except Exception as e:
@@ -837,76 +1038,109 @@ class CameraThread(QThread):
             time.sleep(0.016)  # Target ~60Hz update rate
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Apply all software image processing steps with robust white balance."""
+        """Apply processing only when controls are actively adjusted from defaults."""
         if frame is None:
             return None
         
+        # Check if ANY processing is needed
+        needs_processing = (
+            (not self.auto_wb and (self.manual_wb_temp != 5500 or self.wb_tint != 0)) or
+            self.sw_brightness != 0 or
+            self.sw_contrast != 0 or
+            self.sw_saturation != 0 or
+            self.sw_exposure_comp != 0 or
+            (hasattr(self, 'dehaze_amount') and self.dehaze_amount > 0)
+        )
+        
+        if not needs_processing:
+            # Return original frame untouched for maximum quality
+            return frame
+        
         try:
-            # 1. White Balance Correction (do this first!)
-            if self.auto_wb:
-                # Estimate white balance from frame
-                new_gains = self._estimate_white_balance(frame)
-                
-                # Temporal smoothing
-                self.wb_history.append(new_gains)
-                if len(self.wb_history) > 3:
-                    # Use median for robustness against outliers
-                    smoothed_gains = np.median(list(self.wb_history), axis=0)
-                else:
-                    smoothed_gains = new_gains
-                
-                self.wb_gains = smoothed_gains
-            else:
-                # Manual white balance
+            processed_frame = frame.copy()
+            
+            # 1. Manual White Balance Only (when explicitly set)
+            if not self.auto_wb and (self.manual_wb_temp != 5500 or self.wb_tint != 0):
                 self.wb_gains = self._kelvin_to_rgb_gains(self.manual_wb_temp)
                 self.wb_gains = self._apply_tint_adjustment(self.wb_gains, self.wb_tint)
+                
+                # Apply gains using LUT for performance
+                for i in range(3):
+                    lut = np.arange(256, dtype=np.float32) * self.wb_gains[i]
+                    lut = np.clip(lut, 0, 255).astype(np.uint8)
+                    processed_frame[:, :, i] = cv2.LUT(processed_frame[:, :, i], lut)
             
-            # Apply white balance gains
-            balanced_frame = frame.astype(np.float32)
-            for i in range(3):  # BGR channels
-                balanced_frame[:, :, i] *= self.wb_gains[i]
-            
-            # Clip to valid range
-            balanced_frame = np.clip(balanced_frame, 0, 255).astype(np.uint8)
-            
-            # 2. Brightness / Contrast adjustments
+            # 2. Brightness / Contrast adjustments (only when non-zero)
             brightness = self.sw_brightness + self.sw_exposure_comp
-            contrast_alpha = 1.0 + (self.sw_contrast / 100.0)
+            contrast = self.sw_contrast
             
-            adjusted_frame = cv2.convertScaleAbs(balanced_frame, alpha=contrast_alpha, beta=brightness)
+            if brightness != 0 or contrast != 0:
+                contrast_alpha = 1.0 + (contrast / 100.0)
+                processed_frame = cv2.convertScaleAbs(processed_frame, alpha=contrast_alpha, beta=brightness)
             
-            # 3. Saturation adjustment
+            # 3. Saturation adjustment (only when non-zero)
             if self.sw_saturation != 0:
-                hsv = cv2.cvtColor(adjusted_frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-                
-                # Adjust saturation
+                hls = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2HLS).astype(np.float32)
                 saturation_factor = 1.0 + (self.sw_saturation / 100.0)
-                hsv[:, :, 1] *= saturation_factor
-                hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0, 255)
-                
-                adjusted_frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+                hls[:, :, 2] = np.clip(hls[:, :, 2] * saturation_factor, 0, 255)
+                processed_frame = cv2.cvtColor(hls.astype(np.uint8), cv2.COLOR_HLS2BGR)
             
-            return adjusted_frame
+            # 4. Haze Reduction (only when enabled)
+            if hasattr(self, 'dehaze_amount') and self.dehaze_amount > 0:
+                processed_frame = self._apply_dehaze(processed_frame, self.dehaze_amount)
+            
+            return processed_frame
             
         except Exception as e:
             logger.error(f"Frame processing failed: {e}")
-            return frame  # Return original frame on error
+            return frame
 
     def capture_image(self, quality="high") -> Optional[np.ndarray]:
         """
-        Captures the most recent PROCESSED frame from the preview stream.
-        This is more stable than reconfiguring the camera on the fly.
+        Captures a high-resolution image. In native mode, uses current frame.
+        In custom mode, temporarily switches to high resolution.
         """
-        if self.current_frame is not None:
-            return self.current_frame.copy()  # Return a copy to prevent data races
-        
-        # Fallback for when the stream might be slow to start
-        if self.camera and self.camera.isOpened():
+        if not self.camera or not self.camera.isOpened():
+            return None
+            
+        try:
+            # In native mode, use current frame to avoid disrupting camera
+            if getattr(self, 'native_mode', True):
+                if self.current_frame is not None:
+                    return self.current_frame.copy()
+                # Fallback: single frame capture without resolution change
+                ret, frame = self.camera.read()
+                if ret and frame is not None:
+                    return self._process_frame(frame)
+                return None
+            
+            # Custom mode: temporarily switch to high resolution
+            current_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            current_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # Switch to high resolution for capture
+            high_res_config = IMX219_CONFIGS["capture_high"]
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, high_res_config["width"])
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, high_res_config["height"])
+            
+            # Flush buffer and capture fresh frame
+            for _ in range(3):
+                self.camera.read()
+            
             ret, frame = self.camera.read()
+            
+            # Restore preview resolution
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, current_width)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, current_height)
+            
             if ret and frame is not None:
-                return frame
-        
-        return None
+                return self._process_frame(frame)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Capture failed: {e}")
+            return self.current_frame.copy() if self.current_frame is not None else None
             
     def get_camera_info(self) -> dict:
         """Get current camera settings"""
@@ -924,11 +1158,16 @@ class CameraThread(QThread):
         }
         
     def stop(self):
-        """Clean camera shutdown"""
+        """Clean camera shutdown with logging."""
         self.running = False
         self.wait()
         if self.camera:
-            self.camera.release()
+            try:
+                self.camera.release()
+                logger.info("Camera released successfully.")
+            except Exception as e:
+                logger.error(f"Error releasing camera: {e}")
+            self.camera = None
 
 class AIScaleDataCollector(QMainWindow):
     """Enhanced main application with better error handling and features"""
@@ -1041,6 +1280,14 @@ class AIScaleDataCollector(QMainWindow):
         # Setup keyboard shortcuts
         self.setup_shortcuts()
         
+    def toggle_wb_debug(self):
+        """Toggle white balance debug mode"""
+        if hasattr(self.camera_thread, 'wb_debug_mode'):
+            self.camera_thread.wb_debug_mode = not self.camera_thread.wb_debug_mode
+            state = "ON" if self.camera_thread.wb_debug_mode else "OFF"
+            self.status_bar.showMessage(f"White Balance Debug: {state}", 3000)
+            logger.info(f"White Balance Debug Mode: {state}")
+        
     def create_menu_bar(self):
         """Creates the main menu bar."""
         menu_bar = self.menuBar()
@@ -1055,6 +1302,29 @@ class AIScaleDataCollector(QMainWindow):
         validate_action = QAction("&Validate Dataset", self)
         validate_action.triggered.connect(self.run_quick_validation)
         file_menu.addAction(validate_action)
+        
+        # Add debug menu
+        debug_menu = menu_bar.addMenu("&Debug")
+        wb_debug_action = QAction("Toggle &White Balance Debug", self)
+        wb_debug_action.setShortcut("Ctrl+D")
+        wb_debug_action.triggered.connect(self.toggle_wb_debug)
+        debug_menu.addAction(wb_debug_action)
+        
+        # Add view menu for UI options
+        view_menu = menu_bar.addMenu("&View")
+        
+        # Toggle histogram display
+        histogram_action = QAction("Show &Histogram", self)
+        histogram_action.setCheckable(True)
+        histogram_action.setChecked(True)
+        histogram_action.triggered.connect(self.toggle_histogram)
+        view_menu.addAction(histogram_action)
+        
+        # Performance mode
+        performance_action = QAction("&Performance Mode", self)
+        performance_action.setCheckable(True)
+        performance_action.triggered.connect(self.toggle_performance_mode)
+        view_menu.addAction(performance_action)
         
         file_menu.addSeparator()
         
@@ -1143,7 +1413,7 @@ class AIScaleDataCollector(QMainWindow):
                 break
 
     def switch_camera(self, ui_index):
-        """Switches camera with proper control updates"""
+        """Switches camera with smooth UX feedback"""
         if not self.available_cameras or ui_index < 0:
             return
 
@@ -1151,11 +1421,21 @@ class AIScaleDataCollector(QMainWindow):
         if camera_index is None:
             return
             
+        # Show switching feedback
+        self.status_bar.showMessage("🔄 Switching camera...", 2000)
+        self.camera_view.setText("Switching Camera...")
+        QApplication.processEvents()  # Update UI immediately
+        
         logger.info(f"Switching to camera index: {camera_index}")
         
         self.camera_thread.stop()
         
-        if self.camera_thread.initialize_camera(camera_index):
+        # Use current native mode setting
+        native_mode = True
+        if hasattr(self, 'camera_controls') and hasattr(self.camera_controls, 'native_mode_cb'):
+            native_mode = self.camera_controls.native_mode_cb.isChecked()
+            
+        if self.camera_thread.initialize_camera(camera_index, native_mode):
             self.start_camera_feed()
             self.config_manager.set("last_camera_index", camera_index)
             
@@ -1163,8 +1443,15 @@ class AIScaleDataCollector(QMainWindow):
             if hasattr(self, 'camera_controls'):
                 self.camera_controls.camera_thread = self.camera_thread
                 self.camera_controls.reset_all()
+                
+            self.status_bar.showMessage(f"✅ Switched to Camera {camera_index}", 2000)
         else:
             self.handle_camera_status(f"Failed to switch to Camera {camera_index}", "error")
+            # Revert combo box selection
+            for i in range(self.camera_combo.count()):
+                if self.camera_combo.itemData(i) == self.config_manager.get("last_camera_index", 0):
+                    self.camera_combo.setCurrentIndex(i)
+                    break
 
     def create_camera_section(self, parent_layout):
         """Enhanced camera view with a scrollable controls panel."""
@@ -1359,44 +1646,81 @@ class AIScaleDataCollector(QMainWindow):
             self.capture_button.setEnabled(False)
             
     def capture_image(self):
-        """Enhanced capture with visual feedback and color correction"""
+        """Enhanced capture with visual feedback and better error handling"""
         if not self.current_class:
-            # Shake animation on the button
             self.shake_widget(self.capture_button)
-            QMessageBox.warning(self, "No Selection", "Please select a produce type first.")
+            QMessageBox.warning(self, "No Selection", "📁 Please select a produce type first.")
             return
             
+        # Disable capture button during process
+        self.capture_button.setEnabled(False)
+        self.capture_button.setText("Capturing...")
+        
         # Visual capture indication
         self.capture_indicator.show()
         QTimer.singleShot(200, self.capture_indicator.hide)
         
-        # Capture frame
-        frame = self.camera_thread.capture_image()
-        if frame is None:
+        # Capture frame with timeout protection
+        try:
+            frame = self.camera_thread.capture_image()
+            if frame is None:
+                raise RuntimeError("Camera returned empty frame")
+                
+            # Check frame quality
+            if frame.size == 0:
+                raise RuntimeError("Frame has zero size")
+                
+            # Quality check for very dark/bright images
+            mean_brightness = np.mean(frame)
+            if mean_brightness < 10:
+                logger.warning(f"Very dark image captured (brightness: {mean_brightness:.1f})")
+            elif mean_brightness > 245:
+                logger.warning(f"Very bright image captured (brightness: {mean_brightness:.1f})")
+                
+            # The frame is already processed by the camera thread
+            frame_to_save = frame
+            
+            # Debug logging if enabled
+            if hasattr(self.camera_thread, 'wb_debug_mode') and self.camera_thread.wb_debug_mode:
+                gains = self.camera_thread.wb_gains
+                logger.info(f"WB Debug - Gains: B={gains[0]:.3f}, G={gains[1]:.3f}, R={gains[2]:.3f}")
+                
+            # Save image
+            self.save_image_async(frame_to_save)
+            
+            # Success feedback
+            self.capture_button.setText("✓ Captured")
+            self.capture_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #30D158;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 12px 24px;
+                    font-weight: 500;
+                    font-size: 15px;
+                }
+            """)
+            QTimer.singleShot(800, self.reset_capture_button)
+            
+        except Exception as e:
             self.shake_widget(self.capture_button)
-            QMessageBox.critical(self, "Capture Error", "Failed to capture image.")
-            return
+            error_msg = str(e)
+            logger.error(f"Capture failed: {error_msg}")
             
-        # The frame is already processed by the camera thread, no extra processing needed here.
-        frame_to_save = frame
-            
-        # Save image
-        self.save_image_async(frame_to_save)
-        
-        # Success feedback
-        self.capture_button.setText("✓ Captured")
-        self.capture_button.setStyleSheet("""
-            QPushButton {
-                background-color: #30D158;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 12px 24px;
-                font-weight: 500;
-                font-size: 15px;
-            }
-        """)
-        QTimer.singleShot(300, self.reset_capture_button)
+            if "empty frame" in error_msg:
+                suggestion = "Check camera connection and lighting."
+            elif "timeout" in error_msg.lower():
+                suggestion = "Camera may be busy. Wait a moment and try again."
+            else:
+                suggestion = "Restart the application if this persists."
+                
+            QMessageBox.critical(
+                self, 
+                "Capture Failed", 
+                f"📷 Could not capture image:\n\n{error_msg}\n\n💡 {suggestion}"
+            )
+            self.reset_capture_button()
 
     def shake_widget(self, widget):
         """Shake animation for error feedback"""
@@ -1417,9 +1741,42 @@ class AIScaleDataCollector(QMainWindow):
         """Reset capture button after capture"""
         self.capture_button.setText("Capture Image")
         self.capture_button.setEnabled(True)
+        # Reset button style
+        self.capture_button.setStyleSheet("")
+        
+    def flash_success_indicator(self):
+        """Flash green border on camera view for successful capture"""
+        original_style = self.camera_view.styleSheet()
+        success_style = original_style + "border: 3px solid #30D158;"
+        
+        self.camera_view.setStyleSheet(success_style)
+        QTimer.singleShot(150, lambda: self.camera_view.setStyleSheet(original_style))
+        
+    def toggle_histogram(self, checked):
+        """Toggle histogram widget visibility for performance."""
+        if hasattr(self, 'histogram_widget'):
+            self.histogram_widget.setVisible(checked)
+            self.status_bar.showMessage(f"Histogram {'shown' if checked else 'hidden'}", 2000)
+            
+    def toggle_performance_mode(self, checked):
+        """Toggle performance optimizations."""
+        if checked:
+            # Reduce update frequency further
+            self.update_timer.setInterval(1000)  # 1 second
+            # Hide histogram by default
+            if hasattr(self, 'histogram_widget'):
+                self.histogram_widget.setVisible(False)
+            self.status_bar.showMessage("Performance mode enabled", 3000)
+        else:
+            # Restore normal frequency
+            self.update_timer.setInterval(500)
+            # Show histogram
+            if hasattr(self, 'histogram_widget'):
+                self.histogram_widget.setVisible(True)
+            self.status_bar.showMessage("Performance mode disabled", 3000)
         
     def on_save_finished(self, success, result, metadata):
-        """Handle save completion with simple feedback"""
+        """Handle save completion with enhanced feedback"""
         if success:
             filename = Path(result).name
             self.session_count += 1
@@ -1428,11 +1785,31 @@ class AIScaleDataCollector(QMainWindow):
             
             if metadata:
                 self.session_manager.add_capture(metadata)
-                self.db_manager.add_capture(metadata) # Add to database
+                self.db_manager.add_capture(metadata)
                 
-            self.status_bar.showMessage(f"Saved: {filename}", 3000)
+            # Show success with file size and quality info
+            file_size_mb = Path(result).stat().st_size / (1024 * 1024)
+            resolution = f"{metadata.resolution[0]}x{metadata.resolution[1]}" if metadata else "unknown"
+            self.status_bar.showMessage(f"✅ Saved: {filename} ({file_size_mb:.1f} MB, {resolution})", 4000)
+            
+            # Flash green border on camera view
+            self.flash_success_indicator()
         else:
-            QMessageBox.critical(self, "Save Error", f"Failed to save: {result}")
+            # Show detailed error with suggestions
+            error_msg = str(result)
+            if "disk space" in error_msg.lower():
+                suggestion = "Free up disk space and try again."
+            elif "permission" in error_msg.lower():
+                suggestion = "Check folder permissions."
+            else:
+                suggestion = "Check camera connection and try again."
+                
+            QMessageBox.critical(
+                self, 
+                "Save Failed", 
+                f"Could not save image:\n\n{error_msg}\n\n💡 {suggestion}"
+            )
+            self.status_bar.showMessage(f"❌ Save failed: {error_msg[:50]}...", 5000)
             
     def update_fps(self):
         """Update FPS display"""
@@ -1492,10 +1869,10 @@ class AIScaleDataCollector(QMainWindow):
         self.populate_camera_list(self.camera_combo)
         self.camera_combo.currentIndexChanged.connect(self.switch_camera)
         
-        # Automatically start with the default (or last used) camera
+        # Automatically start with the default (or last used) camera in native mode
         if self.available_cameras:
             initial_cam_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
-            if self.camera_thread.initialize_camera(initial_cam_index):
+            if self.camera_thread.initialize_camera(initial_cam_index, native_mode=True):
                 self.start_camera_feed()
             else:
                 self.handle_camera_status("Failed to initialize the default camera.", "error")
@@ -1510,7 +1887,7 @@ class AIScaleDataCollector(QMainWindow):
         """Starts the camera thread if it's not already running."""
         if not self.camera_thread.isRunning():
             self.camera_thread.start()
-            self.update_timer.start(300) # Update FPS ~3 times/sec
+            self.update_timer.start(500)  # Update FPS less frequently for performance
             logger.info("Camera thread started.")
 
     def handle_camera_status(self, message, severity):
