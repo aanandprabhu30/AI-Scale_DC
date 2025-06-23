@@ -2,8 +2,6 @@
 
 A professional, production-ready tool for capturing high-quality produce images for computer vision model training. This application is optimized for macOS and features a robust, intuitive interface designed to maximize data collection efficiency and quality.
 
-![App Screenshot](https://i.imgur.com/g91xJ0s.png)
-
 ## 🌟 Key Features
 
 * **High-Quality Image Processing**: On-the-fly, software-based image processing corrects for common camera issues.

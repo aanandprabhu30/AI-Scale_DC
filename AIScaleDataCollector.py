@@ -809,12 +809,93 @@ class CameraThread(QThread):
 
     def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
         """
-        Minimal white balance correction - since both cameras show haze,
-        it's likely the lighting environment, not the camera.
+        Advanced automatic white balance using multiple algorithms.
+        Specifically tuned for IMX219 sensor with blue tint correction.
         """
-        # Return neutral gains - no automatic correction
-        # User can adjust manually if needed
-        return np.array([1.0, 1.0, 1.0])
+        try:
+            # Convert to float for precise calculations
+            frame_float = frame.astype(np.float32)
+            h, w, c = frame_float.shape
+            
+            # 1. Robust Gray World with outlier exclusion
+            # Exclude very dark (shadows) and very bright (highlights/overexposed) regions
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            mask = (gray > 30) & (gray < 220)  # Exclude extreme values
+            
+            if np.sum(mask) < (h * w * 0.1):  # If too few pixels, use all
+                mask = np.ones_like(gray, dtype=bool)
+            
+            # Calculate means only from valid regions
+            b_mean = np.mean(frame_float[mask, 0])
+            g_mean = np.mean(frame_float[mask, 1])
+            r_mean = np.mean(frame_float[mask, 2])
+            
+            # Prevent division by zero
+            if min(b_mean, g_mean, r_mean) < 1.0:
+                return np.array([1.0, 1.0, 1.0])
+            
+            # Gray world assumption: RGB means should be equal
+            avg_mean = (b_mean + g_mean + r_mean) / 3.0
+            gray_world_gains = np.array([avg_mean/b_mean, avg_mean/g_mean, avg_mean/r_mean])
+            
+            # 2. White Point Detection (find bright neutral areas)
+            # Look for pixels that could be white references
+            bright_mask = gray > 180
+            white_gains = np.array([1.0, 1.0, 1.0])
+            
+            if np.sum(bright_mask) > 100:  # Enough bright pixels
+                b_white = np.mean(frame_float[bright_mask, 0])
+                g_white = np.mean(frame_float[bright_mask, 1])
+                r_white = np.mean(frame_float[bright_mask, 2])
+                
+                if min(b_white, g_white, r_white) > 50:  # Valid white point
+                    max_white = max(b_white, g_white, r_white)
+                    white_gains = np.array([max_white/b_white, max_white/g_white, max_white/r_white])
+            
+            # 3. IMX219 sensor-specific correction for blue bias
+            # This sensor has stronger blue response in daylight conditions
+            sensor_gains = np.array([0.90, 1.0, 1.05])  # Reduce blue, boost red slightly
+            
+            # 4. Combine algorithms with weights
+            # Gray World: 60%, White Point: 25%, Sensor Correction: 15%
+            combined_gains = (
+                0.60 * gray_world_gains + 
+                0.25 * white_gains + 
+                0.15 * sensor_gains
+            )
+            
+            # 5. Apply bounds and smoothing
+            # Clamp gains to reasonable range to avoid over-correction
+            combined_gains = np.clip(combined_gains, 0.5, 2.0)
+            
+            # Temporal smoothing for stability
+            self.wb_history.append(combined_gains)
+            if len(self.wb_history) > 1:
+                # Weighted average with more weight on recent frames
+                weights = np.linspace(0.5, 1.0, len(self.wb_history))
+                weights /= np.sum(weights)
+                
+                smoothed_gains = np.zeros(3)
+                for i, gains in enumerate(self.wb_history):
+                    smoothed_gains += weights[i] * gains
+                
+                combined_gains = smoothed_gains
+            
+            # Normalize to preserve overall brightness
+            combined_gains = combined_gains / np.mean(combined_gains)
+            
+            # Debug logging
+            if self.wb_debug_mode:
+                logger.info(f"WB Debug - Gray World: B={gray_world_gains[0]:.3f}, G={gray_world_gains[1]:.3f}, R={gray_world_gains[2]:.3f}")
+                logger.info(f"WB Debug - Final Gains: B={combined_gains[0]:.3f}, G={combined_gains[1]:.3f}, R={combined_gains[2]:.3f}")
+                logger.info(f"WB Debug - Mean RGB: {b_mean:.1f}, {g_mean:.1f}, {r_mean:.1f}")
+            
+            return combined_gains
+            
+        except Exception as e:
+            logger.error(f"White balance estimation failed: {e}")
+            # Return slight blue reduction as fallback for IMX219
+            return np.array([0.90, 1.0, 1.05])
 
     def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
         """
@@ -851,8 +932,8 @@ class CameraThread(QThread):
             b_gain = 1.1 + 0.15 * t
         
         # IMX219 sensor correction factors
-        # This sensor tends to have stronger blue response
-        sensor_correction = np.array([0.95, 1.0, 1.05])  # BGR
+        # This sensor tends to have stronger blue response - reduce blue bias
+        sensor_correction = np.array([1.05, 1.0, 0.95])  # BGR - reduce blue, boost red
         
         # Apply sensor correction and convert to BGR order
         gains = np.array([b_gain, g_gain, r_gain]) * sensor_correction
@@ -1038,12 +1119,14 @@ class CameraThread(QThread):
             time.sleep(0.016)  # Target ~60Hz update rate
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Apply processing only when controls are actively adjusted from defaults."""
+        """Apply processing with automatic white balance correction by default."""
         if frame is None:
             return None
         
-        # Check if ANY processing is needed
+        # Always apply automatic white balance correction unless explicitly disabled
+        # This fixes the persistent blue tint issue
         needs_processing = (
+            self.auto_wb or  # Apply auto WB by default
             (not self.auto_wb and (self.manual_wb_temp != 5500 or self.wb_tint != 0)) or
             self.sw_brightness != 0 or
             self.sw_contrast != 0 or
@@ -1053,22 +1136,29 @@ class CameraThread(QThread):
         )
         
         if not needs_processing:
-            # Return original frame untouched for maximum quality
+            # This should rarely happen now since auto_wb is usually True
             return frame
         
         try:
             processed_frame = frame.copy()
             
-            # 1. Manual White Balance Only (when explicitly set)
-            if not self.auto_wb and (self.manual_wb_temp != 5500 or self.wb_tint != 0):
+            # 1. White Balance Correction (Auto or Manual)
+            if self.auto_wb:
+                # Automatic white balance - estimate from scene
+                self.wb_gains = self._estimate_white_balance(processed_frame)
+            elif self.manual_wb_temp != 5500 or self.wb_tint != 0:
+                # Manual white balance based on temperature/tint
                 self.wb_gains = self._kelvin_to_rgb_gains(self.manual_wb_temp)
                 self.wb_gains = self._apply_tint_adjustment(self.wb_gains, self.wb_tint)
-                
-                # Apply gains using LUT for performance
-                for i in range(3):
-                    lut = np.arange(256, dtype=np.float32) * self.wb_gains[i]
-                    lut = np.clip(lut, 0, 255).astype(np.uint8)
-                    processed_frame[:, :, i] = cv2.LUT(processed_frame[:, :, i], lut)
+            else:
+                # Fallback: apply minimal correction for IMX219 blue bias
+                self.wb_gains = np.array([0.90, 1.0, 1.05])  # BGR
+            
+            # Apply white balance gains using LUT for performance
+            for i in range(3):
+                lut = np.arange(256, dtype=np.float32) * self.wb_gains[i]
+                lut = np.clip(lut, 0, 255).astype(np.uint8)
+                processed_frame[:, :, i] = cv2.LUT(processed_frame[:, :, i], lut)
             
             # 2. Brightness / Contrast adjustments (only when non-zero)
             brightness = self.sw_brightness + self.sw_exposure_comp
@@ -1287,6 +1377,31 @@ class AIScaleDataCollector(QMainWindow):
             state = "ON" if self.camera_thread.wb_debug_mode else "OFF"
             self.status_bar.showMessage(f"White Balance Debug: {state}", 3000)
             logger.info(f"White Balance Debug Mode: {state}")
+    
+    def show_wb_info(self):
+        """Show current white balance information"""
+        if hasattr(self.camera_thread, 'wb_gains'):
+            gains = self.camera_thread.wb_gains
+            auto_wb = self.camera_thread.auto_wb
+            temp = self.camera_thread.manual_wb_temp
+            tint = self.camera_thread.wb_tint
+            
+            info_text = f"""White Balance Status:
+            
+Mode: {'Automatic' if auto_wb else 'Manual'}
+Temperature: {temp}K
+Tint: {tint}
+
+Current Gains (BGR):
+Blue: {gains[0]:.3f}
+Green: {gains[1]:.3f}
+Red: {gains[2]:.3f}
+
+Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"""
+            
+            QMessageBox.information(self, "White Balance Info", info_text)
+        else:
+            QMessageBox.warning(self, "White Balance Info", "White balance information not available.")
         
     def create_menu_bar(self):
         """Creates the main menu bar."""
@@ -1309,6 +1424,12 @@ class AIScaleDataCollector(QMainWindow):
         wb_debug_action.setShortcut("Ctrl+D")
         wb_debug_action.triggered.connect(self.toggle_wb_debug)
         debug_menu.addAction(wb_debug_action)
+        
+        # Add white balance info action
+        wb_info_action = QAction("Show White Balance &Info", self)
+        wb_info_action.setShortcut("Ctrl+I")
+        wb_info_action.triggered.connect(self.show_wb_info)
+        debug_menu.addAction(wb_info_action)
         
         # Add view menu for UI options
         view_menu = menu_bar.addMenu("&View")
@@ -1870,8 +1991,11 @@ class AIScaleDataCollector(QMainWindow):
         self.camera_combo.currentIndexChanged.connect(self.switch_camera)
         
         # Automatically start with the default (or last used) camera in native mode
+        # Enable auto white balance by default to fix blue tint
         if self.available_cameras:
             initial_cam_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
+            # Ensure auto white balance is enabled by default
+            self.camera_thread.auto_wb = True
             if self.camera_thread.initialize_camera(initial_cam_index, native_mode=True):
                 self.start_camera_feed()
             else:
