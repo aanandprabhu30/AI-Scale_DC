@@ -335,7 +335,7 @@ class CameraControlsWidget(QWidget):
         # --- Camera Mode ---
         layout.addWidget(QLabel("<b>Camera Mode</b>"), 4, 0, 1, 3)
         self.native_mode_cb = QCheckBox("Native Mode (Recommended)")
-        self.native_mode_cb.setChecked(True)
+        self.native_mode_cb.setChecked(False)  # Changed to False
         self.native_mode_cb.stateChanged.connect(self.on_native_mode_changed)
         layout.addWidget(self.native_mode_cb, 5, 0, 1, 3)
         
@@ -482,7 +482,7 @@ class CameraControlsWidget(QWidget):
         )
         
     def reset_all(self):
-        self.native_mode_cb.setChecked(True)
+        self.native_mode_cb.setChecked(False)  # Changed to False
         self.brightness_slider.setValue(0)
         self.contrast_slider.setValue(0)
         self.saturation_slider.setValue(0)
@@ -493,12 +493,28 @@ class CameraControlsWidget(QWidget):
         self.wb_tint_slider.setValue(0)
         
     def on_native_mode_changed(self):
-        """Handle native mode checkbox changes with delay after stop."""
+        """Handle native mode checkbox changes"""
         native_mode = self.native_mode_cb.isChecked()
         
-        # Get current camera index from the thread itself
+        if native_mode:
+            # Warn user that native mode disables color correction
+            reply = QMessageBox.warning(
+                self,
+                "Native Mode Warning",
+                "Native mode disables automatic color correction.\n\n"
+                "This may result in blue-tinted images with your camera.\n\n"
+                "Continue to native mode?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.No:
+                self.native_mode_cb.setChecked(False)
+                return
+        
+        # Continue with existing mode change logic...
         current_index = self.camera_thread.current_index
-        if current_index == -1:  # Fallback if not initialized yet
+        if current_index == -1:
             logger.warning("Camera index not found in thread, using config fallback.")
             if hasattr(self, 'config_manager'):
                 current_index = self.config_manager.get("last_camera_index", 0)
@@ -508,17 +524,15 @@ class CameraControlsWidget(QWidget):
         # Restart camera with new mode
         logger.info(f"Re-initializing camera at index {current_index} for mode change.")
         self.camera_thread.stop()
-        time.sleep(0.5)  # Add delay to ensure camera is released
+        time.sleep(0.5)
         if self.camera_thread.initialize_camera(current_index, native_mode):
             self.camera_thread.start()
             mode_str = "native" if native_mode else "custom"
-            # Safely access status bar if available
             try:
                 parent = self.parent()
                 if parent and hasattr(parent, 'status_bar'):
                     parent.status_bar.showMessage(f"Switched to {mode_str} mode", 3000)
             except AttributeError:
-                # Status bar not available, just log the change
                 logger.info(f"Switched to {mode_str} mode")
     
     def apply_preset(self, preset_name):
@@ -753,14 +767,14 @@ class CameraThread(QThread):
         self.sw_saturation = 0
         self.sw_exposure_comp = 0
         
-        # White balance values (defaults that preserve camera behavior)
-        self.auto_wb = True  # Use camera's native auto WB by default
+        # White balance values - ALWAYS APPLY AUTO WB BY DEFAULT
+        self.auto_wb = True  # This should ALWAYS start as True
         self.manual_wb_temp = 5500  # Neutral temperature
         self.wb_tint = 0  # No tint adjustment
-        self.native_mode = True  # New: preserve camera's natural settings
+        self.native_mode = False  # Changed: Start in custom mode to ensure processing
         
         # White balance estimation state
-        self.wb_gains = np.array([1.0, 1.0, 1.0])  # BGR gains
+        self.wb_gains = np.array([0.85, 1.0, 1.15])  # Start with blue reduction for IMX219
         self.wb_history = deque(maxlen=10)  # Temporal smoothing
         self.scene_stable_count = 0  # Track scene stability
         self.last_histogram = None  # For scene change detection
@@ -809,93 +823,88 @@ class CameraThread(QThread):
 
     def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
         """
-        Advanced automatic white balance using multiple algorithms.
-        Specifically tuned for IMX219 sensor with blue tint correction.
+        Enhanced automatic white balance specifically for IMX219 with backlighting.
         """
         try:
             # Convert to float for precise calculations
             frame_float = frame.astype(np.float32)
             h, w, c = frame_float.shape
             
-            # 1. Robust Gray World with outlier exclusion
-            # Exclude very dark (shadows) and very bright (highlights/overexposed) regions
+            # For extreme backlighting, we need to be more aggressive
+            # 1. Create a mask that excludes overexposed AND underexposed regions
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            mask = (gray > 30) & (gray < 220)  # Exclude extreme values
             
-            if np.sum(mask) < (h * w * 0.1):  # If too few pixels, use all
-                mask = np.ones_like(gray, dtype=bool)
+            # More conservative range to avoid backlit areas
+            mask = (gray > 50) & (gray < 200)
             
-            # Calculate means only from valid regions
-            b_mean = np.mean(frame_float[mask, 0])
-            g_mean = np.mean(frame_float[mask, 1])
-            r_mean = np.mean(frame_float[mask, 2])
+            # Also exclude areas with extreme color channels (likely backlighting)
+            b_channel = frame[:, :, 0]
+            g_channel = frame[:, :, 1]
+            r_channel = frame[:, :, 2]
+            
+            # Exclude pixels where any channel is near saturation
+            color_mask = (b_channel < 240) & (g_channel < 240) & (r_channel < 240)
+            mask = mask & color_mask
+            
+            if np.sum(mask) < (h * w * 0.05):  # If too few pixels remain
+                # Use center crop instead
+                center_y, center_x = h // 2, w // 2
+                crop_size = min(h, w) // 4
+                y1, y2 = center_y - crop_size, center_y + crop_size
+                x1, x2 = center_x - crop_size, center_x + crop_size
+                center_crop = frame_float[y1:y2, x1:x2]
+                b_mean = np.mean(center_crop[:, :, 0])
+                g_mean = np.mean(center_crop[:, :, 1])
+                r_mean = np.mean(center_crop[:, :, 2])
+            else:
+                # Calculate means only from valid regions
+                b_mean = np.mean(frame_float[mask, 0])
+                g_mean = np.mean(frame_float[mask, 1])
+                r_mean = np.mean(frame_float[mask, 2])
             
             # Prevent division by zero
             if min(b_mean, g_mean, r_mean) < 1.0:
-                return np.array([1.0, 1.0, 1.0])
+                # Return IMX219-specific correction
+                return np.array([0.85, 1.0, 1.15])
             
-            # Gray world assumption: RGB means should be equal
+            # For IMX219 with backlighting, we need stronger correction
+            # The sensor has blue bias that's amplified by backlighting
             avg_mean = (b_mean + g_mean + r_mean) / 3.0
-            gray_world_gains = np.array([avg_mean/b_mean, avg_mean/g_mean, avg_mean/r_mean])
             
-            # 2. White Point Detection (find bright neutral areas)
-            # Look for pixels that could be white references
-            bright_mask = gray > 180
-            white_gains = np.array([1.0, 1.0, 1.0])
+            # Calculate initial gains
+            gains = np.array([avg_mean/b_mean, avg_mean/g_mean, avg_mean/r_mean])
             
-            if np.sum(bright_mask) > 100:  # Enough bright pixels
-                b_white = np.mean(frame_float[bright_mask, 0])
-                g_white = np.mean(frame_float[bright_mask, 1])
-                r_white = np.mean(frame_float[bright_mask, 2])
-                
-                if min(b_white, g_white, r_white) > 50:  # Valid white point
-                    max_white = max(b_white, g_white, r_white)
-                    white_gains = np.array([max_white/b_white, max_white/g_white, max_white/r_white])
+            # Apply IMX219-specific correction factor
+            # This sensor needs aggressive blue reduction in backlit conditions
+            imx219_correction = np.array([0.85, 1.0, 1.10])  # Reduce blue more, boost red
+            gains = gains * imx219_correction
             
-            # 3. IMX219 sensor-specific correction for blue bias
-            # This sensor has stronger blue response in daylight conditions
-            sensor_gains = np.array([0.90, 1.0, 1.05])  # Reduce blue, boost red slightly
+            # Clamp to reasonable range
+            gains = np.clip(gains, 0.5, 2.5)
             
-            # 4. Combine algorithms with weights
-            # Gray World: 60%, White Point: 25%, Sensor Correction: 15%
-            combined_gains = (
-                0.60 * gray_world_gains + 
-                0.25 * white_gains + 
-                0.15 * sensor_gains
-            )
-            
-            # 5. Apply bounds and smoothing
-            # Clamp gains to reasonable range to avoid over-correction
-            combined_gains = np.clip(combined_gains, 0.5, 2.0)
+            # Normalize to preserve brightness
+            gains = gains / np.mean(gains)
             
             # Temporal smoothing for stability
-            self.wb_history.append(combined_gains)
-            if len(self.wb_history) > 1:
-                # Weighted average with more weight on recent frames
-                weights = np.linspace(0.5, 1.0, len(self.wb_history))
-                weights /= np.sum(weights)
-                
-                smoothed_gains = np.zeros(3)
-                for i, gains in enumerate(self.wb_history):
-                    smoothed_gains += weights[i] * gains
-                
-                combined_gains = smoothed_gains
-            
-            # Normalize to preserve overall brightness
-            combined_gains = combined_gains / np.mean(combined_gains)
+            self.wb_history.append(gains)
+            if len(self.wb_history) > 3:
+                # Use median for robustness against outliers
+                all_gains = np.array(list(self.wb_history))
+                smoothed_gains = np.median(all_gains, axis=0)
+                gains = smoothed_gains
             
             # Debug logging
             if self.wb_debug_mode:
-                logger.info(f"WB Debug - Gray World: B={gray_world_gains[0]:.3f}, G={gray_world_gains[1]:.3f}, R={gray_world_gains[2]:.3f}")
-                logger.info(f"WB Debug - Final Gains: B={combined_gains[0]:.3f}, G={combined_gains[1]:.3f}, R={combined_gains[2]:.3f}")
-                logger.info(f"WB Debug - Mean RGB: {b_mean:.1f}, {g_mean:.1f}, {r_mean:.1f}")
+                logger.info(f"WB Debug - RGB means: {r_mean:.1f}, {g_mean:.1f}, {b_mean:.1f}")
+                logger.info(f"WB Debug - Final Gains: B={gains[0]:.3f}, G={gains[1]:.3f}, R={gains[2]:.3f}")
+                logger.info(f"WB Debug - Valid pixels: {np.sum(mask) / (h*w) * 100:.1f}%")
             
-            return combined_gains
+            return gains
             
         except Exception as e:
             logger.error(f"White balance estimation failed: {e}")
-            # Return slight blue reduction as fallback for IMX219
-            return np.array([0.90, 1.0, 1.05])
+            # Return IMX219 correction as fallback
+            return np.array([0.85, 1.0, 1.15])
 
     def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
         """
@@ -983,99 +992,170 @@ class CameraThread(QThread):
             
             # 3. Estimate transmission
             # t(x) = 1 - ω * min_c(min_y∈Ω(x)(I^c(y)/A^c))
-            omega = 0.95 * strength  # Haze removal strength
-            normalized = frame.astype(np.float32) / (atmospheric_light.astype(np.float32) + 1)
-            dark_normalized = cv2.erode(normalized.min(axis=2), np.ones((kernel_size, kernel_size)))
-            transmission = 1 - omega * dark_normalized
-            transmission = np.maximum(transmission, 0.1)  # Avoid division by very small numbers
+            omega = 0.95  # Dehazing parameter
+            transmission = 1.0 - omega * (dark_channel / np.max(atmospheric_light))
+            transmission = np.clip(transmission, 0.1, 1.0)  # Prevent division by zero
             
-            # 4. Refine transmission using bilateral filter
-            transmission = cv2.bilateralFilter(transmission.astype(np.float32), 9, 75, 75)
+            # 4. Recover scene radiance
+            # J(x) = (I(x) - A) / t(x) + A
+            result = np.zeros_like(frame, dtype=np.float32)
+            for c in range(3):
+                result[:, :, c] = (frame[:, :, c].astype(np.float32) - atmospheric_light[c]) / transmission + atmospheric_light[c]
             
-            # 5. Recover scene radiance
-            # J(x) = (I(x) - A) / max(t(x), t0) + A
-            transmission_3d = np.stack([transmission] * 3, axis=2)
-            dehazed = (frame.astype(np.float32) - atmospheric_light) / transmission_3d + atmospheric_light
+            # 5. Blend with original based on strength
+            result = np.clip(result, 0, 255).astype(np.uint8)
+            blended = cv2.addWeighted(frame, 1.0 - strength, result, strength, 0)
             
-            # 6. Enhance contrast slightly after dehazing
-            dehazed = np.clip(dehazed, 0, 255).astype(np.uint8)
-            
-            # Apply subtle contrast enhancement for stronger dehazing
-            if strength > 0.5:
-                # CLAHE for local contrast enhancement
-                lab = cv2.cvtColor(dehazed, cv2.COLOR_BGR2LAB)
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-                dehazed = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-            
-            return dehazed
+            return blended
             
         except Exception as e:
-            logger.error(f"Dehaze failed: {e}")
+            logger.error(f"Dehazing failed: {e}")
             return frame
 
-    def initialize_camera(self, index=0, native_mode=True) -> bool:
-        """Initialize camera with minimal interference to preserve native quality."""
-        self.current_index = index  # Store the current index
-        logger.info(f"Attempting to initialize camera at index {index} (native_mode={native_mode})...")
+    def _add_diagnostic_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Add diagnostic information overlay to the frame."""
+        if not self.wb_debug_mode:
+            return frame
+            
         try:
-            # On macOS, AVFoundation is preferred.
+            overlay_frame = frame.copy()
+            h, w = frame.shape[:2]
+            
+            # Create semi-transparent background for text
+            overlay = np.zeros_like(frame)
+            cv2.rectangle(overlay, (10, 10), (350, 150), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.7, overlay_frame, 1.0, 0, overlay_frame)
+            
+            # Text settings
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale = 0.5
+            color = (0, 255, 0)  # Green text
+            thickness = 1
+            
+            # Display information
+            y_offset = 30
+            texts = [
+                f"Mode: {'Native' if self.native_mode else 'Custom'}",
+                f"Auto WB: {'ON' if self.auto_wb else 'OFF'}",
+                f"WB Gains: B={self.wb_gains[0]:.2f} G={self.wb_gains[1]:.2f} R={self.wb_gains[2]:.2f}",
+                f"Temperature: {self.manual_wb_temp}K",
+                f"Tint: {self.wb_tint}",
+                f"FPS: {self.fps:.1f}"
+            ]
+            
+            for i, text in enumerate(texts):
+                cv2.putText(overlay_frame, text, (20, y_offset + i*20), 
+                           font, scale, color, thickness, cv2.LINE_AA)
+            
+            # Color patch analysis
+            # Sample center region for color balance
+            center_y, center_x = h // 2, w // 2
+            sample_size = 50
+            y1, y2 = center_y - sample_size, center_y + sample_size
+            x1, x2 = center_x - sample_size, center_x + sample_size
+            
+            if y1 >= 0 and y2 < h and x1 >= 0 and x2 < w:
+                sample = frame[y1:y2, x1:x2]
+                b_mean = np.mean(sample[:, :, 0])
+                g_mean = np.mean(sample[:, :, 1])
+                r_mean = np.mean(sample[:, :, 2])
+                
+                # Draw color balance indicator
+                bar_width = 100
+                bar_height = 10
+                bar_x = 20
+                bar_y = 160
+                
+                # Draw bars
+                cv2.rectangle(overlay_frame, (bar_x, bar_y), 
+                             (bar_x + int(b_mean * bar_width / 255), bar_y + bar_height), 
+                             (255, 0, 0), -1)
+                cv2.rectangle(overlay_frame, (bar_x, bar_y + 15), 
+                             (bar_x + int(g_mean * bar_width / 255), bar_y + 15 + bar_height), 
+                             (0, 255, 0), -1)
+                cv2.rectangle(overlay_frame, (bar_x, bar_y + 30), 
+                             (bar_x + int(r_mean * bar_width / 255), bar_y + 30 + bar_height), 
+                             (0, 0, 255), -1)
+                
+                # Draw labels
+                cv2.putText(overlay_frame, f"B: {b_mean:.0f}", (bar_x + bar_width + 10, bar_y + 8), 
+                           font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(overlay_frame, f"G: {g_mean:.0f}", (bar_x + bar_width + 10, bar_y + 23), 
+                           font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(overlay_frame, f"R: {r_mean:.0f}", (bar_x + bar_width + 10, bar_y + 38), 
+                           font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                
+                # Draw center sample box
+                cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+            
+            return overlay_frame
+            
+        except Exception as e:
+            logger.error(f"Failed to add diagnostic overlay: {e}")
+            return frame
+
+    def initialize_camera(self, index=0, native_mode=False) -> bool:
+        """Initialize camera - force custom mode for proper color correction."""
+        self.current_index = index
+        self.native_mode = native_mode
+        
+        # Override native mode to ensure color correction works
+        if native_mode:
+            logger.warning("Native mode requested but overriding to custom mode for color correction")
+            native_mode = False
+            self.native_mode = False
+        
+        logger.info(f"Initializing camera at index {index} (native_mode={native_mode})...")
+        
+        try:
+            # On macOS, AVFoundation is preferred
             self.camera = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
             logger.info(f"Camera backend set to AVFoundation.")
 
             if not self.camera or not self.camera.isOpened():
                 logger.warning(f"Failed to open camera with AVFoundation. Trying default backend...")
-                self.camera = cv2.VideoCapture(index) # Fallback to default
+                self.camera = cv2.VideoCapture(index)
                 if not self.camera or not self.camera.isOpened():
                     self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
                     return False
 
-            if native_mode:
-                # NATIVE MODE: Minimal interference - let camera use its defaults
-                logger.info("Using native mode - preserving camera defaults")
-                
-                # Only set essential properties
-                preview_config = IMX219_CONFIGS["preview"]
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, preview_config["width"])
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, preview_config["height"])
-                self.camera.set(cv2.CAP_PROP_FPS, preview_config["fps"])
-                
-                # DON'T force specific FOURCC, auto-exposure, or white balance
-                # Let the camera use its optimal settings
-                
-            else:
-                # CUSTOM MODE: Full control
-                logger.info("Using custom mode - applying specific settings")
-                
-                preview_config = IMX219_CONFIGS["preview"]
-                target_width = preview_config["width"]
-                target_height = preview_config["height"]
-                target_fps = preview_config["fps"]
-                
-                self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
-                self.camera.set(cv2.CAP_PROP_FPS, target_fps)
-                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
-                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
-                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
-                self.camera.set(cv2.CAP_PROP_AUTO_WB, 1.0)
+            # Always use custom mode settings for consistent processing
+            logger.info("Using custom mode for consistent color processing")
+            
+            preview_config = IMX219_CONFIGS["preview"]
+            target_width = preview_config["width"]
+            target_height = preview_config["height"]
+            target_fps = preview_config["fps"]
+            
+            self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
+            self.camera.set(cv2.CAP_PROP_FPS, target_fps)
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+            
+            # Don't set AUTO_WB property - let our software handle it
+            # self.camera.set(cv2.CAP_PROP_AUTO_WB, 0)  # Disable hardware auto WB
             
             # Allow time for the camera to stabilize
-            time.sleep(0.5 if native_mode else 1.0)
+            time.sleep(1.0)
 
+            # Verify camera is working
             width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
             if width == 0 or height == 0:
-                logger.error("Camera returned 0x0 resolution. It might be in use or drivers are faulty.")
+                logger.error("Camera returned 0x0 resolution.")
                 self.camera.release()
                 self.statusUpdate.emit("Camera resolution is 0x0. Is it in use?", "error")
                 return False
 
-            mode_str = "native" if native_mode else "custom"
-            self.statusUpdate.emit(f"Camera initialized ({mode_str}): {width}x{height}", "success")
-            logger.info(f"Camera successfully initialized in {mode_str} mode: {width}x{height}.")
+            self.statusUpdate.emit(f"Camera initialized (custom mode): {width}x{height}", "success")
+            logger.info(f"Camera successfully initialized: {width}x{height}")
+            
+            # Ensure auto white balance is enabled
+            self.auto_wb = True
+            logger.info("Auto white balance enabled by default")
+            
             return True
             
         except Exception as e:
@@ -1083,11 +1163,12 @@ class CameraThread(QThread):
             self.statusUpdate.emit(error_msg, "error")
             logger.exception(error_msg)
             return False
-        
+
     def run(self):
         """Enhanced camera capture loop with software image processing"""
         self.running = True
         no_frame_count = 0
+        warmup_frames = 10  # Process some frames for WB to stabilize
         
         while self.running:
             if self.camera and self.camera.isOpened():
@@ -1096,69 +1177,62 @@ class CameraThread(QThread):
                 if ret and frame is not None:
                     no_frame_count = 0
 
-                    # Apply software processing
+                    # ALWAYS process frame for color correction
                     processed_frame = self._process_frame(frame)
                     
                     self.current_frame = processed_frame
                     
-                    # Correct FPS calculation over a rolling window
+                    # Update FPS
                     self.frame_times.append(time.perf_counter())
                     if len(self.frame_times) > 1:
                         time_span = self.frame_times[-1] - self.frame_times[0]
                         if time_span > 0:
                             self.fps = (len(self.frame_times) - 1) / time_span
                     
+                    # Emit processed frame
                     self.frameReady.emit(processed_frame)
+                    
+                    # During warmup, log WB info
+                    if warmup_frames > 0:
+                        warmup_frames -= 1
+                        if self.wb_debug_mode or warmup_frames == 0:
+                            logger.info(f"WB warmup - Gains: B={self.wb_gains[0]:.3f}, G={self.wb_gains[1]:.3f}, R={self.wb_gains[2]:.3f}")
                     
                 else:
                     no_frame_count += 1
-                    if no_frame_count > 100: # After ~1.6s of no frames
+                    if no_frame_count > 100:
                         self.statusUpdate.emit("No frames received from camera.", "warning")
-                        no_frame_count = 0 # Reset to avoid spamming
+                        no_frame_count = 0
                         
             time.sleep(0.016)  # Target ~60Hz update rate
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Apply processing with automatic white balance correction by default."""
+        """Apply processing - ALWAYS process frames to fix color issues."""
         if frame is None:
             return None
-        
-        # Always apply automatic white balance correction unless explicitly disabled
-        # This fixes the persistent blue tint issue
-        needs_processing = (
-            self.auto_wb or  # Apply auto WB by default
-            (not self.auto_wb and (self.manual_wb_temp != 5500 or self.wb_tint != 0)) or
-            self.sw_brightness != 0 or
-            self.sw_contrast != 0 or
-            self.sw_saturation != 0 or
-            self.sw_exposure_comp != 0 or
-            (hasattr(self, 'dehaze_amount') and self.dehaze_amount > 0)
-        )
-        
-        if not needs_processing:
-            # This should rarely happen now since auto_wb is usually True
-            return frame
         
         try:
             processed_frame = frame.copy()
             
-            # 1. White Balance Correction (Auto or Manual)
+            # ALWAYS apply white balance correction for IMX219
+            # This is the key fix - we process every frame regardless of settings
             if self.auto_wb:
-                # Automatic white balance - estimate from scene
+                # Automatic white balance - always active by default
                 self.wb_gains = self._estimate_white_balance(processed_frame)
             elif self.manual_wb_temp != 5500 or self.wb_tint != 0:
                 # Manual white balance based on temperature/tint
                 self.wb_gains = self._kelvin_to_rgb_gains(self.manual_wb_temp)
                 self.wb_gains = self._apply_tint_adjustment(self.wb_gains, self.wb_tint)
             else:
-                # Fallback: apply minimal correction for IMX219 blue bias
-                self.wb_gains = np.array([0.90, 1.0, 1.05])  # BGR
+                # Even with no specific WB setting, apply IMX219 correction
+                self.wb_gains = np.array([0.85, 1.0, 1.15])  # Always reduce blue
             
-            # Apply white balance gains using LUT for performance
+            # Apply white balance gains with proper clipping
             for i in range(3):
-                lut = np.arange(256, dtype=np.float32) * self.wb_gains[i]
-                lut = np.clip(lut, 0, 255).astype(np.uint8)
-                processed_frame[:, :, i] = cv2.LUT(processed_frame[:, :, i], lut)
+                # Apply gain to each channel
+                channel = processed_frame[:, :, i].astype(np.float32)
+                channel *= self.wb_gains[i]
+                processed_frame[:, :, i] = np.clip(channel, 0, 255).astype(np.uint8)
             
             # 2. Brightness / Contrast adjustments (only when non-zero)
             brightness = self.sw_brightness + self.sw_exposure_comp
@@ -1178,6 +1252,10 @@ class CameraThread(QThread):
             # 4. Haze Reduction (only when enabled)
             if hasattr(self, 'dehaze_amount') and self.dehaze_amount > 0:
                 processed_frame = self._apply_dehaze(processed_frame, self.dehaze_amount)
+            
+            # Add diagnostic overlay if debug mode is on
+            if self.wb_debug_mode:
+                processed_frame = self._add_diagnostic_overlay(processed_frame)
             
             return processed_frame
             
@@ -1267,6 +1345,11 @@ class AIScaleDataCollector(QMainWindow):
         self.config_manager = ConfigManager(CONFIG_FILE)
         self.db_manager = DatabaseManager(DATABASE_FILE)
         self.camera_thread = CameraThread()
+        
+        # ENSURE AUTO WHITE BALANCE IS ON BY DEFAULT
+        self.camera_thread.auto_wb = True
+        self.camera_thread.native_mode = False  # Start in custom mode
+        
         self.camera_thread.frameReady.connect(self.update_frame)
         self.camera_thread.statusUpdate.connect(self.handle_camera_status)
         self.current_class = ""
@@ -1377,6 +1460,10 @@ class AIScaleDataCollector(QMainWindow):
             state = "ON" if self.camera_thread.wb_debug_mode else "OFF"
             self.status_bar.showMessage(f"White Balance Debug: {state}", 3000)
             logger.info(f"White Balance Debug Mode: {state}")
+            
+            # Force a control update to refresh the display
+            if hasattr(self, 'camera_controls'):
+                self.camera_controls.update_controls()
     
     def show_wb_info(self):
         """Show current white balance information"""
@@ -1990,14 +2077,17 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
         self.populate_camera_list(self.camera_combo)
         self.camera_combo.currentIndexChanged.connect(self.switch_camera)
         
-        # Automatically start with the default (or last used) camera in native mode
-        # Enable auto white balance by default to fix blue tint
+        # Automatically start with custom mode (not native) to ensure color correction
         if self.available_cameras:
             initial_cam_index = self.camera_combo.itemData(self.camera_combo.currentIndex())
-            # Ensure auto white balance is enabled by default
+            # Force custom mode and auto white balance
             self.camera_thread.auto_wb = True
-            if self.camera_thread.initialize_camera(initial_cam_index, native_mode=True):
+            self.camera_thread.native_mode = False
+            if self.camera_thread.initialize_camera(initial_cam_index, native_mode=False):  # Changed to False
                 self.start_camera_feed()
+                # Update UI to reflect non-native mode
+                if hasattr(self, 'camera_controls') and hasattr(self.camera_controls, 'native_mode_cb'):
+                    self.camera_controls.native_mode_cb.setChecked(False)
             else:
                 self.handle_camera_status("Failed to initialize the default camera.", "error")
         else:
