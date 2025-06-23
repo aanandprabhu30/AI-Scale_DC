@@ -1,7 +1,9 @@
 #!/bin/bash
 
-echo "🚀 Setting up AI-Scale Data Collector v2.2"
+echo "🚀 Setting up AI-Scale Data Collector v2.2.0"
 echo "=================================================="
+echo "Status: Camera improvements implemented, blue tint issue pending resolution"
+echo ""
 
 # Check if Python 3 is installed
 if ! command -v python3 &> /dev/null; then
@@ -54,5 +56,8 @@ echo "1. If this is the first time, grant Camera Permissions for your Terminal a
 echo "   System Settings → Privacy & Security → Camera"
 echo "2. To run the application, use the start script:"
 echo "   ./start_collector.sh"
+echo ""
+echo "⚠️  Note: Camera improvements have been implemented, but blue tint issue may still persist."
+echo "   Use manual override (Ctrl+M) and debug tools (Cmd+D) if needed."
 echo ""
 echo "Happy data collecting! 🍎📸" 

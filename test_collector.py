@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Basic Smoke Test for AI-Scale Data Collector
+Basic Smoke Test for AI-Scale Data Collector v2.2.0
 
 This script performs a basic "smoke test" by attempting to initialize
 the main application components without showing the GUI. It helps ensure
 that all dependencies are correctly installed and that the application
 can start without immediate crashes.
+
+Status: Camera improvements implemented, blue tint issue pending resolution
 """
 
 import sys

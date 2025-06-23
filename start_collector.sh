@@ -1,7 +1,9 @@
 #!/bin/bash
 
-echo "🍎 Starting AI-Scale Data Collector"
-echo "=================================="
+echo "🍎 Starting AI-Scale Data Collector v2.2.0"
+echo "=========================================="
+echo "Status: Camera improvements implemented, blue tint issue pending resolution"
+echo ""
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
@@ -28,6 +30,11 @@ fi
 echo ""
 echo "🚀 Launching Data Collector..."
 echo "Press Ctrl+C in this terminal to close the application."
+echo ""
+echo "💡 Tips:"
+echo "  - Use Cmd+D to toggle debug overlay"
+echo "  - Use Ctrl+M for manual white balance override"
+echo "  - Use Ctrl+E for extreme blue fix"
 echo ""
 
 # Run the data collector

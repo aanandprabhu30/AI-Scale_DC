@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-AI-Scale Dataset Validator
+AI-Scale Dataset Validator v2.2.0
 Validates collected dataset for training readiness by querying the central database.
+
+Status: Camera improvements implemented, blue tint issue pending resolution
 """
 
 import os

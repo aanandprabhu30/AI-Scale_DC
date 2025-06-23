@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Quick Dataset Validation for AI-Scale
+Quick Dataset Validation for AI-Scale v2.2.0
 Lightweight validation for integration with main application.
 Now uses a central SQLite database for metadata.
+
+Status: Camera improvements implemented, blue tint issue pending resolution
 """
 
 import cv2

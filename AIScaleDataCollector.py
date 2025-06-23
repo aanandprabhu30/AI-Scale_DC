@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 """
-AI-Scale Data Collector v2.1
+AI-Scale Data Collector v2.2.0
 Optimized for M2 MacBook Air with Arducam IMX219 USB Camera
 Production-ready tool for capturing produce images for AI training
+
+STATUS: Camera improvements implemented (detection, manual controls, debug tools)
+         Blue tint issue still present - requires further investigation
+
+Features:
+- Automatic camera type detection (MacBook vs External)
+- Manual white balance override system
+- Debug overlay and diagnostic tools
+- Enhanced white balance algorithm
+- Performance optimizations
+
+Known Issues:
+- Blue tint still present despite improvements
+- White balance algorithm needs further refinement
 """
 
 import sys
@@ -761,6 +775,9 @@ class CameraThread(QThread):
         self.fps = 0.0
         self.current_index = -1  # Track the current camera index
         
+        # Camera type detection
+        self.camera_type = "unknown"  # Will be detected during initialization
+        
         # Software image processing values
         self.sw_brightness = 0
         self.sw_contrast = 0
@@ -773,9 +790,9 @@ class CameraThread(QThread):
         self.wb_tint = 0  # No tint adjustment
         self.native_mode = False  # Changed: Start in custom mode to ensure processing
         
-        # White balance estimation state
-        self.wb_gains = np.array([0.85, 1.0, 1.15])  # Start with blue reduction for IMX219
-        self.wb_history = deque(maxlen=10)  # Temporal smoothing
+        # White balance estimation state - MORE AGGRESSIVE DEFAULTS
+        self.wb_gains = np.array([0.75, 1.0, 1.25])  # Much stronger blue reduction
+        self.wb_history = deque(maxlen=3)  # Shorter history for faster adaptation
         self.scene_stable_count = 0  # Track scene stability
         self.last_histogram = None  # For scene change detection
         
@@ -821,90 +838,174 @@ class CameraThread(QThread):
         except Exception as e:
             logger.error(f"Error setting hardware controls: {e}")
 
+    def set_manual_wb_gains(self, b_gain, g_gain, r_gain):
+        """
+        Manually override white balance gains for extreme cases.
+        
+        Args:
+            b_gain: Blue channel gain (0.1 to 3.0)
+            g_gain: Green channel gain (0.1 to 3.0)
+            r_gain: Red channel gain (0.1 to 3.0)
+        """
+        self.manual_override_gains = np.array([b_gain, g_gain, r_gain])
+        self.use_manual_override = True
+        logger.info(f"Manual WB override set: B={b_gain:.2f}, G={g_gain:.2f}, R={r_gain:.2f}")
+
+    def clear_manual_override(self):
+        """Clear manual white balance override."""
+        self.use_manual_override = False
+        self.manual_override_gains = None
+        logger.info("Manual WB override cleared")
+
+    def detect_camera_type(self):
+        """Detect if using built-in MacBook camera or external camera."""
+        if not self.camera:
+            return "unknown"
+        
+        # Get camera name if possible
+        width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        
+        # MacBook cameras typically have specific resolutions
+        macbook_resolutions = [
+            (1280, 720),   # HD FaceTime camera
+            (1920, 1080),  # Full HD FaceTime camera
+            (640, 480),    # Legacy FaceTime camera
+            (800, 600),    # Some older MacBook cameras
+        ]
+        
+        if (width, height) in macbook_resolutions:
+            self.camera_type = "macbook"
+            logger.info(f"Detected MacBook built-in camera: {width}x{height}")
+        else:
+            self.camera_type = "external"
+            logger.info(f"Detected external camera: {width}x{height}")
+        
+        return self.camera_type
+
+    def get_base_correction(self):
+        """Get appropriate base correction for camera type."""
+        if hasattr(self, 'camera_type') and self.camera_type == "macbook":
+            # MacBook camera correction - gentler since Apple's ISP already does some correction
+            return np.array([0.88, 1.0, 1.12])  # Gentler correction
+        else:
+            # External camera (IMX219) correction - more aggressive
+            return np.array([0.75, 1.0, 1.25])  # Aggressive correction
+
     def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
         """
-        Enhanced automatic white balance specifically for IMX219 with backlighting.
+        More aggressive white balance correction for persistent blue tint.
         """
         try:
             # Convert to float for precise calculations
             frame_float = frame.astype(np.float32)
             h, w, c = frame_float.shape
             
-            # For extreme backlighting, we need to be more aggressive
-            # 1. Create a mask that excludes overexposed AND underexposed regions
+            # 1. First, apply a FIXED aggressive correction based on camera type
+            # This is a baseline correction that ALWAYS reduces blue
+            base_correction = self.get_base_correction()
+            
+            # 2. Analyze the frame for additional correction
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # More conservative range to avoid backlit areas
-            mask = (gray > 50) & (gray < 200)
+            # Use a tighter range to avoid blown-out areas
+            mask = (gray > 60) & (gray < 180)
             
-            # Also exclude areas with extreme color channels (likely backlighting)
+            # Also exclude extreme color values
             b_channel = frame[:, :, 0]
             g_channel = frame[:, :, 1]
             r_channel = frame[:, :, 2]
             
-            # Exclude pixels where any channel is near saturation
-            color_mask = (b_channel < 240) & (g_channel < 240) & (r_channel < 240)
+            # More aggressive exclusion of saturated pixels
+            color_mask = (b_channel < 220) & (g_channel < 220) & (r_channel < 220)
+            color_mask = color_mask & (b_channel > 30) & (g_channel > 30) & (r_channel > 30)
             mask = mask & color_mask
             
-            if np.sum(mask) < (h * w * 0.05):  # If too few pixels remain
-                # Use center crop instead
+            # If not enough pixels, use center region
+            if np.sum(mask) < (h * w * 0.1):
                 center_y, center_x = h // 2, w // 2
-                crop_size = min(h, w) // 4
-                y1, y2 = center_y - crop_size, center_y + crop_size
-                x1, x2 = center_x - crop_size, center_x + crop_size
+                crop_size = min(h, w) // 3
+                y1, y2 = max(0, center_y - crop_size), min(h, center_y + crop_size)
+                x1, x2 = max(0, center_x - crop_size), min(w, center_x + crop_size)
+                
                 center_crop = frame_float[y1:y2, x1:x2]
                 b_mean = np.mean(center_crop[:, :, 0])
                 g_mean = np.mean(center_crop[:, :, 1])
                 r_mean = np.mean(center_crop[:, :, 2])
+                
+                # Log what we're analyzing
+                if self.wb_debug_mode:
+                    logger.info(f"WB Debug - Using center crop: {x2-x1}x{y2-y1} pixels")
             else:
-                # Calculate means only from valid regions
                 b_mean = np.mean(frame_float[mask, 0])
                 g_mean = np.mean(frame_float[mask, 1])
                 r_mean = np.mean(frame_float[mask, 2])
+                
+                if self.wb_debug_mode:
+                    logger.info(f"WB Debug - Using {np.sum(mask)} pixels ({np.sum(mask)/(h*w)*100:.1f}%)")
             
             # Prevent division by zero
             if min(b_mean, g_mean, r_mean) < 1.0:
-                # Return IMX219-specific correction
-                return np.array([0.85, 1.0, 1.15])
+                return base_correction
             
-            # For IMX219 with backlighting, we need stronger correction
-            # The sensor has blue bias that's amplified by backlighting
-            avg_mean = (b_mean + g_mean + r_mean) / 3.0
+            # 3. Calculate dynamic gains with gray world assumption
+            # Target a slightly warm neutral (reduce blue cast)
+            target_gray = (b_mean + g_mean + r_mean) / 3.0
+            target_gray *= 0.95  # Slightly reduce overall to warm it up
             
-            # Calculate initial gains
-            gains = np.array([avg_mean/b_mean, avg_mean/g_mean, avg_mean/r_mean])
+            dynamic_gains = np.array([
+                target_gray / b_mean,
+                target_gray / g_mean,
+                target_gray / r_mean
+            ])
             
-            # Apply IMX219-specific correction factor
-            # This sensor needs aggressive blue reduction in backlit conditions
-            imx219_correction = np.array([0.85, 1.0, 1.10])  # Reduce blue more, boost red
-            gains = gains * imx219_correction
+            # 4. Combine base correction with dynamic gains
+            # Give more weight to the fixed correction
+            combined_gains = base_correction * 0.7 + dynamic_gains * 0.3
             
-            # Clamp to reasonable range
-            gains = np.clip(gains, 0.5, 2.5)
+            # 5. Apply additional blue reduction if blue is still dominant
+            if b_mean > g_mean * 1.1:  # Blue is more than 10% higher than green
+                additional_blue_reduction = 0.9
+                combined_gains[0] *= additional_blue_reduction
+                if self.wb_debug_mode:
+                    logger.info("WB Debug - Applying additional blue reduction")
             
-            # Normalize to preserve brightness
-            gains = gains / np.mean(gains)
+            # 6. Clamp gains to reasonable but wider range
+            combined_gains = np.clip(combined_gains, 0.4, 3.0)
             
-            # Temporal smoothing for stability
-            self.wb_history.append(gains)
-            if len(self.wb_history) > 3:
-                # Use median for robustness against outliers
-                all_gains = np.array(list(self.wb_history))
-                smoothed_gains = np.median(all_gains, axis=0)
-                gains = smoothed_gains
+            # 7. Normalize to preserve overall brightness
+            # But allow some brightness reduction if needed
+            mean_gain = np.mean(combined_gains)
+            if mean_gain > 1.5:
+                combined_gains = combined_gains / mean_gain * 1.5
+            
+            # 8. Apply temporal smoothing but with less weight on history
+            self.wb_history.append(combined_gains)
+            if len(self.wb_history) > 2:
+                # Use weighted average favoring recent frames
+                weights = np.array([0.2, 0.3, 0.5])[-len(self.wb_history):]
+                weights = weights / np.sum(weights)
+                
+                smoothed_gains = np.zeros(3)
+                for i, (w, gains) in enumerate(zip(weights, self.wb_history)):
+                    smoothed_gains += w * gains
+                
+                combined_gains = smoothed_gains
             
             # Debug logging
             if self.wb_debug_mode:
-                logger.info(f"WB Debug - RGB means: {r_mean:.1f}, {g_mean:.1f}, {b_mean:.1f}")
-                logger.info(f"WB Debug - Final Gains: B={gains[0]:.3f}, G={gains[1]:.3f}, R={gains[2]:.3f}")
-                logger.info(f"WB Debug - Valid pixels: {np.sum(mask) / (h*w) * 100:.1f}%")
+                logger.info(f"WB Debug - Camera type: {self.camera_type}")
+                logger.info(f"WB Debug - RGB means: B={b_mean:.1f}, G={g_mean:.1f}, R={r_mean:.1f}")
+                logger.info(f"WB Debug - Base correction: B={base_correction[0]:.3f}, G={base_correction[1]:.3f}, R={base_correction[2]:.3f}")
+                logger.info(f"WB Debug - Dynamic gains: B={dynamic_gains[0]:.3f}, G={dynamic_gains[1]:.3f}, R={dynamic_gains[2]:.3f}")
+                logger.info(f"WB Debug - Final gains: B={combined_gains[0]:.3f}, G={combined_gains[1]:.3f}, R={combined_gains[2]:.3f}")
             
-            return gains
+            return combined_gains
             
         except Exception as e:
             logger.error(f"White balance estimation failed: {e}")
-            # Return IMX219 correction as fallback
-            return np.array([0.85, 1.0, 1.15])
+            # Return camera-specific correction as fallback
+            return self.get_base_correction()
 
     def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
         """
@@ -1035,6 +1136,7 @@ class CameraThread(QThread):
             # Display information
             y_offset = 30
             texts = [
+                f"Camera: {self.camera_type.title()}",
                 f"Mode: {'Native' if self.native_mode else 'Custom'}",
                 f"Auto WB: {'ON' if self.auto_wb else 'OFF'}",
                 f"WB Gains: B={self.wb_gains[0]:.2f} G={self.wb_gains[1]:.2f} R={self.wb_gains[2]:.2f}",
@@ -1152,6 +1254,9 @@ class CameraThread(QThread):
             self.statusUpdate.emit(f"Camera initialized (custom mode): {width}x{height}", "success")
             logger.info(f"Camera successfully initialized: {width}x{height}")
             
+            # Detect camera type for appropriate corrections
+            self.detect_camera_type()
+            
             # Ensure auto white balance is enabled
             self.auto_wb = True
             logger.info("Auto white balance enabled by default")
@@ -1214,9 +1319,10 @@ class CameraThread(QThread):
         try:
             processed_frame = frame.copy()
             
-            # ALWAYS apply white balance correction for IMX219
-            # This is the key fix - we process every frame regardless of settings
-            if self.auto_wb:
+            # Check for manual override first
+            if hasattr(self, 'use_manual_override') and self.use_manual_override and hasattr(self, 'manual_override_gains'):
+                self.wb_gains = self.manual_override_gains
+            elif self.auto_wb:
                 # Automatic white balance - always active by default
                 self.wb_gains = self._estimate_white_balance(processed_frame)
             elif self.manual_wb_temp != 5500 or self.wb_tint != 0:
@@ -1224,8 +1330,8 @@ class CameraThread(QThread):
                 self.wb_gains = self._kelvin_to_rgb_gains(self.manual_wb_temp)
                 self.wb_gains = self._apply_tint_adjustment(self.wb_gains, self.wb_tint)
             else:
-                # Even with no specific WB setting, apply IMX219 correction
-                self.wb_gains = np.array([0.85, 1.0, 1.15])  # Always reduce blue
+                # Even with no specific WB setting, apply camera-specific correction
+                self.wb_gains = self.get_base_correction()  # Camera-specific correction
             
             # Apply white balance gains with proper clipping
             for i in range(3):
@@ -1475,6 +1581,7 @@ class AIScaleDataCollector(QMainWindow):
             
             info_text = f"""White Balance Status:
             
+Camera Type: {self.camera_thread.camera_type.title()}
 Mode: {'Automatic' if auto_wb else 'Manual'}
 Temperature: {temp}K
 Tint: {tint}
@@ -1489,7 +1596,144 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
             QMessageBox.information(self, "White Balance Info", info_text)
         else:
             QMessageBox.warning(self, "White Balance Info", "White balance information not available.")
+
+    def show_manual_wb_dialog(self):
+        """Show dialog for manual WB gain override."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manual White Balance Override")
+        dialog.setMinimumWidth(400)
         
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        camera_type = self.camera_thread.camera_type.title()
+        instructions = QLabel(
+            f"Camera Type: {camera_type}\n\n"
+            "Set manual gain values for each color channel.\n"
+            "Lower values reduce that color, higher values increase it.\n"
+            "For blue tint: reduce Blue (try 0.6-0.8) and increase Red (try 1.2-1.4)"
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Gain sliders
+        sliders = {}
+        slider_layouts = {}
+        labels = {}
+        
+        for channel, default, color in [("Blue", 0.75, "blue"), ("Green", 1.0, "green"), ("Red", 1.25, "red")]:
+            channel_layout = QHBoxLayout()
+            
+            label = QLabel(f"{channel}:")
+            label.setMinimumWidth(50)
+            channel_layout.addWidget(label)
+            
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(10, 300)  # 0.1 to 3.0
+            slider.setValue(int(default * 100))
+            slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+            slider.setTickInterval(50)
+            channel_layout.addWidget(slider)
+            
+            value_label = QLabel(f"{default:.2f}")
+            value_label.setMinimumWidth(40)
+            channel_layout.addWidget(value_label)
+            
+            # Connect slider to label
+            slider.valueChanged.connect(lambda v, l=value_label: l.setText(f"{v/100:.2f}"))
+            
+            sliders[channel] = slider
+            labels[channel] = value_label
+            slider_layouts[channel] = channel_layout
+            
+            layout.addLayout(channel_layout)
+        
+        # Preset buttons
+        preset_layout = QHBoxLayout()
+        
+        # Camera-specific presets
+        if self.camera_thread.camera_type == "macbook":
+            # Gentler presets for MacBook camera
+            mild_btn = QPushButton("Mild Correction")
+            mild_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 90, 100, 110))
+            preset_layout.addWidget(mild_btn)
+            
+            moderate_btn = QPushButton("Moderate Correction")
+            moderate_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 88, 100, 112))
+            preset_layout.addWidget(moderate_btn)
+            
+            extreme_btn = QPushButton("Extreme Correction")
+            extreme_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 80, 100, 120))
+            preset_layout.addWidget(extreme_btn)
+        else:
+            # More aggressive presets for external cameras
+            mild_btn = QPushButton("Mild Correction")
+            mild_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 85, 100, 115))
+            preset_layout.addWidget(mild_btn)
+            
+            moderate_btn = QPushButton("Moderate Correction")
+            moderate_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 75, 100, 125))
+            preset_layout.addWidget(moderate_btn)
+            
+            extreme_btn = QPushButton("Extreme Correction")
+            extreme_btn.clicked.connect(lambda: self.set_wb_preset(sliders, 60, 100, 140))
+            preset_layout.addWidget(extreme_btn)
+        
+        layout.addLayout(preset_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(lambda: self.apply_manual_wb(
+            sliders["Blue"].value() / 100,
+            sliders["Green"].value() / 100,
+            sliders["Red"].value() / 100,
+            dialog
+        ))
+        button_layout.addWidget(apply_btn)
+        
+        clear_btn = QPushButton("Clear Override")
+        clear_btn.clicked.connect(lambda: self.clear_manual_wb(dialog))
+        button_layout.addWidget(clear_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+
+    def set_wb_preset(self, sliders, b, g, r):
+        """Set slider values for WB preset."""
+        sliders["Blue"].setValue(b)
+        sliders["Green"].setValue(g)
+        sliders["Red"].setValue(r)
+
+    def apply_manual_wb(self, b_gain, g_gain, r_gain, dialog):
+        """Apply manual WB gains."""
+        self.camera_thread.set_manual_wb_gains(b_gain, g_gain, r_gain)
+        self.status_bar.showMessage(f"Manual WB applied: B={b_gain:.2f}, G={g_gain:.2f}, R={r_gain:.2f}", 3000)
+        dialog.accept()
+
+    def clear_manual_wb(self, dialog):
+        """Clear manual WB override."""
+        self.camera_thread.clear_manual_override()
+        self.status_bar.showMessage("Manual WB override cleared", 3000)
+        dialog.accept()
+
+    def apply_extreme_blue_fix(self):
+        """Quick action to apply extreme blue tint correction."""
+        if self.camera_thread.camera_type == "macbook":
+            # Gentler extreme fix for MacBook camera
+            self.camera_thread.set_manual_wb_gains(0.8, 1.0, 1.2)
+            self.status_bar.showMessage("Extreme blue fix applied (MacBook: B=0.8, G=1.0, R=1.2)", 3000)
+        else:
+            # More aggressive extreme fix for external cameras
+            self.camera_thread.set_manual_wb_gains(0.6, 1.0, 1.4)
+            self.status_bar.showMessage("Extreme blue fix applied (External: B=0.6, G=1.0, R=1.4)", 3000)
+
     def create_menu_bar(self):
         """Creates the main menu bar."""
         menu_bar = self.menuBar()
@@ -1517,6 +1761,18 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
         wb_info_action.setShortcut("Ctrl+I")
         wb_info_action.triggered.connect(self.show_wb_info)
         debug_menu.addAction(wb_info_action)
+        
+        # Add manual WB override action
+        manual_wb_action = QAction("&Manual WB Override...", self)
+        manual_wb_action.setShortcut("Ctrl+M")
+        manual_wb_action.triggered.connect(self.show_manual_wb_dialog)
+        debug_menu.addAction(manual_wb_action)
+        
+        # Add extreme blue fix action
+        extreme_fix_action = QAction("Apply &Extreme Blue Fix", self)
+        extreme_fix_action.setShortcut("Ctrl+E")
+        extreme_fix_action.triggered.connect(self.apply_extreme_blue_fix)
+        debug_menu.addAction(extreme_fix_action)
         
         # Add view menu for UI options
         view_menu = menu_bar.addMenu("&View")
