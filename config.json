@@ -1,0 +1,26 @@
+{
+  "_version": "2.4.0",
+  "_status": "Production ready for RK3568 deployment",
+  "_last_updated": "24 June 2025",
+  "_description": "AI-Scale Data Collector configuration file",
+  "last_camera_index": 0,
+  "window_geometry": null,
+  "save_options": {
+    "create_preview": false,
+    "quality": 95,
+    "format": "jpg"
+  },
+  "camera_controls": {
+    "brightness": 0.0,
+    "contrast": 1.0,
+    "gamma": 1.0,
+    "white_balance": 0.0,
+    "saturation": 1.0,
+    "vibrance": 0.0,
+    "clahe_enabled": false
+  },
+  "display_settings": {
+    "theme": "dark",
+    "optimized_for": "rk3568_1366x768"
+  }
+}

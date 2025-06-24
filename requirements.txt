@@ -1,4 +1,4 @@
-# AI-Scale Data Collector v2.3.0
+# AI-Scale Data Collector v2.4.0
 # Cross-platform support with RK3568 optimizations
 # Last updated: 2025-06-24
 

@@ -1,120 +1,163 @@
-# AI-Scale Data Collector
+# AI-Scale Data Collector v2.4.0
 
-Cross-platform produce image capture and weighing system for RK3568 and other platforms.
+Clean, production-ready produce image capture and weighing system optimized for RK3568 embedded boards.
+
+## Key Features
+
+- **🎯 Visual Enhancement**: Fixes bluish haze, brightness/contrast imbalance, and color accuracy issues
+- **📱 Optimized UI**: Clean interface designed for 1366×768 displays with 6-bit color optimization
+- **🎛️ Real-time Controls**: Live adjustments for brightness, contrast, white balance, gamma, saturation, vibrance
+- **📸 Professional Capture**: Full-resolution images with timestamped filenames and metadata
+- **⚡ Hardware Optimized**: Efficient performance on RK3568 (4GB RAM, 32GB eMMC)
 
 ## Quick Start
 
 ```bash
-# Setup
-./scripts/setup_dev.sh
+# Install dependencies
+pip install -r requirements.txt
 
-# Run
-./scripts/run.sh
-
-# Deploy to RK3568
-sudo ./scripts/deploy_rk3568.sh
+# Run the application
+python run_ai_scale.py
 ```
 
-## Features
+## Hardware Requirements
 
-- **Camera**: Cross-platform support (Linux V4L2, macOS AVFoundation, Windows DirectShow)
-- **Scale**: Auto-detection of USB/RS232 scales with multi-protocol support
-- **Hardware**: RK3568 optimization with Mali GPU and NPU acceleration
-- **UI**: Touch-optimized interface for embedded use
+- **Board**: Rockchip RK3568 (SV3c-MPOS35687B or compatible)
+- **Display**: 15.6" BOE eDP (1366×768, 6-bit color, 45% gamut)
+- **Camera**: Arducam USB with Sony IMX219 sensor (8MP, MJPEG/YUY2)
+- **Scale**: USB/RS232 compatible scales (auto-detected)
 
-## Hardware Support
+## Real-time Image Processing
 
-- **Primary**: Rockchip RK3568 (1366x768 display, 2GB/4GB RAM)
-- **Alternative**: Linux ARM/x86, macOS, Windows
+The application addresses common visual issues through advanced image processing:
 
-## Usage
-
-1. Connect scale (auto-detected)
-2. Select camera (auto-detected)
-3. Choose produce type
-4. Capture images (weight automatically recorded)
-
-**Shortcuts:**
-
-- Space: Capture image
-- Ctrl+Q: Quit
-- F11: Fullscreen
-- Ctrl+D: Debug info
+- **White Balance Correction**: Reduces bluish haze using LAB color space adjustments
+- **Gamma Correction**: Fixes brightness/contrast imbalance for better visibility
+- **Color Enhancement**: Improves accuracy of reds, greens, and yellows
+- **CLAHE**: Local contrast enhancement for better detail preservation
+- **Vibrance Control**: Selective saturation boost for natural-looking colors
 
 ## File Structure
 
-``` bash
+```bash
 AI-Scale/
-├── AIScaleDataCollector.py    # Main application
-├── camera_backend.py          # Camera abstraction
-├── scale_interface.py         # Scale communication
-├── platform_config.py        # Platform detection
-├── hardware_acceleration.py  # GPU/NPU acceleration
-├── system_monitor.py         # Performance monitoring
-├── display_manager.py        # Display optimization
-├── scripts/                  # Shell scripts
-│   ├── setup_dev.sh         # Development setup
-│   ├── run.sh               # Application launcher
-│   └── deploy_rk3568.sh     # Production deployment
-├── requirements.txt          # Dependencies
-├── config.json              # User settings
-└── data/                    # Captured images & metadata
+├── ai_scale_ui.py             # Main application UI
+├── run_ai_scale.py           # Application launcher
+├── camera_backend.py         # Camera abstraction layer
+├── scale_interface.py        # Scale communication interface
+├── requirements.txt         # Python dependencies
+├── config.json             # Persistent settings
+└── data/
+    └── captures/           # Captured images and metadata
 ```
+
+## Usage
+
+1. **Connect Hardware**: Plug in your Arducam USB camera and scale
+2. **Launch Application**: Run `python run_ai_scale.py`
+3. **Select Camera**: Choose your camera from the dropdown
+4. **Adjust Settings**: Use real-time controls to fix visual issues:
+   - **Brightness**: Adjust overall brightness (-50 to +50)
+   - **Contrast**: Modify contrast ratio (0.5 to 2.0)
+   - **Gamma**: Improve brightness balance (0.5 to 2.0)
+   - **White Balance**: Reduce bluish cast (-10 to +10)
+   - **Saturation**: Enhance color accuracy (0.5 to 2.0)
+   - **Vibrance**: Boost muted colors naturally (0.0 to 1.0)
+   - **CLAHE**: Enable local contrast enhancement
+5. **Capture Images**: Click "Capture Image" to save at full resolution
+
+## Captured Data
+
+Each capture creates:
+
+- **Image**: `capture_YYYYMMDD_HHMMSS.jpg` (full resolution, 95% quality)
+- **Metadata**: `capture_YYYYMMDD_HHMMSS.json` with settings and scale reading
+
+The application uses JSON files for metadata storage instead of a database for simplicity and portability.
+
+## Display Optimization
+
+The UI is specifically optimized for your hardware:
+
+- **Layout**: 1366×768 with efficient space usage
+- **Colors**: Carefully chosen for 6-bit displays and 45% gamut
+- **Performance**: 30 FPS real-time preview with minimal CPU usage
+- **Theme**: Dark theme optimized for embedded display characteristics
 
 ## Configuration
 
+Settings are automatically saved to `config.json`:
+
 ```json
 {
-  "camera": {
-    "backend": "v4l2",
-    "default_resolution": [1366, 768],
-    "fps": 30
+  "_version": "2.4.0",
+  "_status": "Production ready for RK3568 deployment",
+  "_last_updated": "24 June 2025",
+  "last_camera_index": 1,
+  "window_geometry": "...",
+  "save_options": {
+    "create_preview": false,
+    "quality": 95
   },
-  "scale": {
-    "auto_connect": true,
-    "default_ports": ["/dev/ttyUSB0", "/dev/ttyS0"]
+  "camera_controls": {
+    "brightness": 0,
+    "contrast": 1.0,
+    "gamma": 1.0,
+    "white_balance": 0.0,
+    "saturation": 1.0,
+    "vibrance": 0.0,
+    "clahe_enabled": false
   }
 }
 ```
 
+## Dependencies
+
+Core dependencies (see `requirements.txt` for full list):
+
+- **PySide6>=6.5.0**: Modern Qt-based GUI framework
+- **opencv-python>=4.8.0**: Computer vision and image processing
+- **numpy>=1.24.0**: Numerical computing
+- **pyserial>=3.5**: Serial communication for scale integration
+- **psutil>=5.9.0**: System monitoring and performance
+
 ## Troubleshooting
 
-**Camera not detected:**
+**Camera Issues:**
 
 ```bash
+# List available cameras
 v4l2-ctl --list-devices
+
+# Check camera permissions
+ls -l /dev/video*
 ```
 
-**Scale not connecting:**
+**Scale Connection:**
 
 ```bash
+# Test scale interface
 python3 -c "from scale_interface import ScaleInterface; print(ScaleInterface().list_serial_ports())"
 ```
 
-**Performance issues:**
+**Display Issues:**
 
-```bash
-./scripts/run.sh --info
-```
+- Ensure display is set to 1366×768 native resolution
+- Check HDMI/eDP connection is secure
+- Verify graphics drivers are installed
 
 ## Development
 
-```bash
-# Test mode
-./scripts/run.sh --test
-
-# Debug mode
-./scripts/run.sh --debug
-
-# System info
-./scripts/run.sh --info
-```
-
-## Service Management (RK3568)
+Test the components:
 
 ```bash
-sudo systemctl start aiscale
-sudo systemctl stop aiscale
-sudo systemctl status aiscale
-sudo journalctl -u aiscale -f
+# Test camera backend
+python3 -c "from camera_backend import CameraBackend; cb = CameraBackend(); print(cb.enumerate_cameras())"
+
+# Test scale interface
+python3 -c "from scale_interface import ScaleInterface; si = ScaleInterface(); print(si.list_serial_ports())"
 ```
+
+## Legacy Support
+
+The original `AIScaleDataCollector.py` is preserved for compatibility but the new `ai_scale_ui.py` is recommended for production use.

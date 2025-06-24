@@ -5,7 +5,8 @@
       "Bash(chmod:*)",
       "Bash(sed:*)",
       "Bash(find:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(rg:*)"
     ],
     "deny": []
   }

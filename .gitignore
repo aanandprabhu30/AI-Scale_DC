@@ -1,5 +1,5 @@
 # AI-Scale Data Collector .gitignore
-# Version 2.3.0 - Cross-platform with RK3568 support
+# Version 2.4.0 - Production ready for RK3568 deployment
 
 # Claude AI Assistant
 .claude/
@@ -34,6 +34,7 @@ env/
 ENV/
 .env
 .venv
+.venv_cursor/
 
 # IDE and Editors
 .vscode/
@@ -55,27 +56,17 @@ Thumbs.db
 desktop.ini
 
 # Application Data
-data/raw/*
-data/processed/*
-data/temp/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep  
-!data/temp/.gitkeep
-data/metadata.db
-data/metadata.db-*
-*.sqlite
-*.sqlite3
+# Keep captures directory structure but ignore actual captured files
+data/captures/*.jpg
+data/captures/*.json
+!data/captures/.gitkeep
 
-# Configuration Files
-config.json
-platform_config.json
-user_config.json
-.aiscale/
+# Configuration Files (keep template, ignore user config)
+# config.json is tracked for default settings
 
 # Logs and Monitoring
 *.log
 logs/
-/var/log/aiscale/
 performance.log
 system_metrics.json
 
@@ -87,29 +78,12 @@ rockchip_*
 /dev/ttyUSB*
 /dev/ttyS*
 
-# Models and Weights
-models/weights/*
-models/rknn/*
-models/trained/*
-!models/weights/.gitkeep
-!models/rknn/.gitkeep
-!models/trained/.gitkeep
-*.rknn
-*.tflite
-*.onnx
-*.pb
-
 # Temporary Files
 *.tmp
 *.temp
 .tmp/
 temp/
 /tmp/
-
-# Deployment
-deploy/
-deployment_logs/
-install.log
 
 # Testing
 .pytest_cache/
