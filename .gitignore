@@ -1,6 +1,10 @@
 # AI-Scale Data Collector .gitignore
 # Version 2.3.0 - Cross-platform with RK3568 support
 
+# Claude AI Assistant
+.claude/
+.claude/*
+
 # Python
 __pycache__/
 *.py[cod]

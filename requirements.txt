@@ -1,6 +1,6 @@
 # AI-Scale Data Collector v2.3.0
 # Cross-platform support with RK3568 optimizations
-# Last updated: 2024-12-24
+# Last updated: 2025-06-24
 
 # Core GUI and Computer Vision
 PySide6>=6.5.0
