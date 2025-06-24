@@ -174,3 +174,8 @@ pip-delete-this-directory.txt
 
 # Claude
 .claude
+
+# Deployment
+deploy/
+deployment_logs/
+install.log

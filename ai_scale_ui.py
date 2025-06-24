@@ -3,6 +3,7 @@
 AI-Scale Data Collector UI v2.4.0
 Clean, production-ready interface optimized for RK3568 (1366x768)
 Addresses: bluish haze, brightness/contrast imbalance, color accuracy issues
+ARM64 optimized with PyQt5 fallback support
 """
 
 import sys
@@ -15,13 +16,31 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QSlider, QGroupBox, QGridLayout,
-    QSplitter, QStatusBar, QMessageBox, QCheckBox
-)
-from PySide6.QtCore import Qt, QTimer, Signal, QThread, QSize
-from PySide6.QtGui import QPixmap, QImage, QFont, QPalette, QColor
+# Try PySide6 first, fallback to PyQt5 for ARM64 compatibility
+try:
+    from PySide6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QLabel, QPushButton, QComboBox, QSlider, QGroupBox, QGridLayout,
+        QSplitter, QStatusBar, QMessageBox, QCheckBox
+    )
+    from PySide6.QtCore import Qt, QTimer, Signal, QThread, QSize
+    from PySide6.QtGui import QPixmap, QImage, QFont, QPalette, QColor
+    QT_FRAMEWORK = "PySide6"
+except ImportError:
+    try:
+        from PyQt5.QtWidgets import (
+            QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+            QLabel, QPushButton, QComboBox, QSlider, QGroupBox, QGridLayout,
+            QSplitter, QStatusBar, QMessageBox, QCheckBox
+        )
+        from PyQt5.QtCore import Qt, QTimer, pyqtSignal as Signal, QThread, QSize
+        from PyQt5.QtGui import QPixmap, QImage, QFont, QPalette, QColor
+        QT_FRAMEWORK = "PyQt5"
+        print("Using PyQt5 fallback for ARM64 compatibility")
+    except ImportError:
+        print("Error: Neither PySide6 nor PyQt5 is available")
+        print("For ARM64 systems, install: sudo apt-get install python3-pyqt5")
+        sys.exit(1)
 
 from camera_backend import CameraBackend
 
@@ -568,7 +587,7 @@ class AIScaleMainWindow(QMainWindow):
         self.update_scale_reading()
     
     def display_frame(self, frame):
-        """Display frame in the UI"""
+        """Display frame with 6-bit color optimization for RK3568 displays"""
         if frame is None:
             return
         
@@ -585,10 +604,14 @@ class AIScaleMainWindow(QMainWindow):
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         
+        # 6-bit color optimization for RK3568 displays (64 levels per channel)
+        # This reduces color depth to match the 6-bit display capabilities
+        frame_6bit = (frame_rgb >> 2) << 2  # Simple bit shift for 6-bit quantization
+        
         # Convert to QImage
-        h, w, ch = frame_rgb.shape
+        h, w, ch = frame_6bit.shape
         bytes_per_line = ch * w
-        qt_image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        qt_image = QImage(frame_6bit.data, w, h, bytes_per_line, QImage.Format_RGB888)
         
         # Convert to QPixmap and display
         pixmap = QPixmap.fromImage(qt_image)
