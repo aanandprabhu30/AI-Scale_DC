@@ -171,3 +171,6 @@ pip-delete-this-directory.txt
 .env.development
 .env.test
 .env.production 
+
+# Claude
+.claude
