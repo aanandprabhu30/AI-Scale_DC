@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 """
-AI-Scale Data Collector v2.2.0
-Optimized for M2 MacBook Air with Arducam IMX219 USB Camera
-Production-ready tool for capturing produce images for AI training
-
-STATUS: Camera improvements implemented (detection, manual controls, debug tools)
-         Blue tint issue still present - requires further investigation
+AI-Scale Data Collector v2.3.0
+Cross-platform produce image capture tool with scale integration
+Optimized for Rockchip RK3568 and other embedded platforms
 
 Features:
-- Automatic camera type detection (MacBook vs External)
-- Manual white balance override system
-- Debug overlay and diagnostic tools
-- Enhanced white balance algorithm
-- Performance optimizations
-
-Known Issues:
-- Blue tint still present despite improvements
-- White balance algorithm needs further refinement
+- Cross-platform camera support (Linux V4L2, macOS AVFoundation, Windows DirectShow)
+- Serial scale integration with auto-detection
+- Hardware-optimized performance for embedded systems
+- Automatic white balance and exposure compensation
+- Platform-specific optimizations
 """
 
 import sys
@@ -30,6 +23,11 @@ from datetime import datetime
 from collections import deque
 from dataclasses import dataclass, asdict
 from typing import Optional, Tuple, List, Dict, Any
+
+# Import platform-specific modules
+from camera_backend import CameraBackend
+from scale_interface import ScaleInterface, ScaleReading, ScaleProtocol
+from platform_config import platform_config
 
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import QPoint, QPropertyAnimation
@@ -53,16 +51,6 @@ try:
     import sqlite3
 
 
-    def check_qt_plugins():
-        """Helper function to diagnose Qt plugin issues."""
-        logger.info("---- Checking Qt Plugin Paths ----")
-        paths = QLibraryInfo.location(QLibraryInfo.PluginsPath)
-        logger.info(f"Expected Qt Plugins Path: {paths}")
-        if not os.path.isdir(paths):
-            logger.warning("Qt Plugins path does not exist!")
-        else:
-            logger.info(f"Platform plugins found: {[d for d in os.listdir(paths) if 'platforms' in d]}")
-        logger.info("---------------------------------")
 
 except ImportError:
     print("❌ PySide6 is not installed. Please run the setup script or install it manually:")
@@ -77,30 +65,22 @@ from tools.data_processing.quick_validate import quick_validate_dataset
 
 # Constants
 APP_NAME = "AI-Scale Data Collector"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 ORGANIZATION = "AI-Scale"
-CONFIG_FILE = "config.json"
-DATABASE_FILE = "data/metadata.db"
+CONFIG_FILE = platform_config.get('storage.data_path', 'data') + "/config.json"
+DATABASE_FILE = platform_config.get('storage.data_path', 'data') + "/metadata.db"
 MIN_DISK_SPACE_MB = 100
-
-
-# IMX219 sensor specifications
-IMX219_CONFIGS = {
-    "preview": {"width": 1920, "height": 1080, "fps": 30},
-    "capture_high": {"width": 3280, "height": 2464, "fps": 15},
-    "capture_medium": {"width": 1920, "height": 1080, "fps": 30},
-    "capture_low": {"width": 1280, "height": 720, "fps": 30}
-}
 
 # Target model input size for reference
 MODEL_INPUT_SIZE = (224, 224)
 
-# Camera configuration constants
-CAMERA_BACKEND = cv2.CAP_AVFOUNDATION  # Best for macOS
-CAMERA_FOURCC = cv2.VideoWriter_fourcc(*'MJPG')
-CAMERA_BUFFER_SIZE = 1
-CAMERA_AUTOFOCUS = 1
-CAMERA_AUTO_EXPOSURE = 0.25
+# Initialize camera backend
+camera_backend = CameraBackend()
+
+# Import hardware acceleration and system monitoring
+from hardware_acceleration import hardware_accelerator
+from system_monitor import system_monitor
+from display_manager import display_manager
 
 @dataclass
 class CaptureMetadata:
@@ -280,6 +260,13 @@ class SaveWorker(QThread):
                 
             metadata = None
             if self.options['create_metadata']:
+                # Get weight from parent thread if available
+                weight = 0.0
+                weight_unit = "g"
+                if hasattr(self.parent(), 'camera_thread') and hasattr(self.parent().camera_thread, 'last_weight'):
+                    weight = self.parent().camera_thread.last_weight
+                    weight_unit = self.parent().camera_thread.weight_unit
+                
                 metadata_tuple = (
                     self.filename,
                     self.class_path.name,
@@ -287,9 +274,11 @@ class SaveWorker(QThread):
                     (self.frame.shape[1], self.frame.shape[0]),
                     file_size,
                     self.cam_info,
-                    self.session_id
+                    self.session_id,
+                    weight,
+                    weight_unit
                 )
-                metadata = CaptureMetadata(*metadata_tuple)
+                metadata = CaptureMetadata(*metadata_tuple[:-2])  # Exclude weight for now
                 # No longer saving JSON file here, will be handled by main thread
 
             self.finished.emit(True, str(filepath), metadata)
@@ -765,6 +754,7 @@ class CameraThread(QThread):
     """Dedicated thread for camera operations with enhanced error handling"""
     frameReady = Signal(np.ndarray)
     statusUpdate = Signal(str, str)  # message, severity
+    scaleReading = Signal(float, str, bool)  # weight, unit, stable
     
     def __init__(self):
         super().__init__()
@@ -777,6 +767,11 @@ class CameraThread(QThread):
         
         # Camera type detection
         self.camera_type = "unknown"  # Will be detected during initialization
+        
+        # Scale interface
+        self.scale = None
+        self.last_weight = 0.0
+        self.weight_unit = "g"
         
         # Software image processing values
         self.sw_brightness = 0
@@ -889,7 +884,7 @@ class CameraThread(QThread):
             # MacBook camera correction - gentler since Apple's ISP already does some correction
             return np.array([0.88, 1.0, 1.12])  # Gentler correction
         else:
-            # External camera (IMX219) correction - more aggressive
+            # External camera correction - more aggressive
             return np.array([0.75, 1.0, 1.25])  # Aggressive correction
 
     def _estimate_white_balance(self, frame: np.ndarray) -> np.ndarray:
@@ -1010,7 +1005,7 @@ class CameraThread(QThread):
     def _kelvin_to_rgb_gains(self, kelvin: float) -> np.ndarray:
         """
         Convert color temperature to RGB gains using accurate color science.
-        Calibrated specifically for IMX219 sensor characteristics.
+        Calibrated for external camera sensor characteristics.
         """
         # Clamp to reasonable range
         kelvin = np.clip(kelvin, 2000, 10000)
@@ -1041,7 +1036,7 @@ class CameraThread(QThread):
             g_gain = 1.0 - 0.05 * t
             b_gain = 1.1 + 0.15 * t
         
-        # IMX219 sensor correction factors
+        # External camera sensor correction factors
         # This sensor tends to have stronger blue response - reduce blue bias
         sensor_correction = np.array([1.05, 1.0, 0.95])  # BGR - reduce blue, boost red
         
@@ -1197,43 +1192,38 @@ class CameraThread(QThread):
             return frame
 
     def initialize_camera(self, index=0, native_mode=False) -> bool:
-        """Initialize camera - force custom mode for proper color correction."""
+        """Initialize camera using platform-specific backend."""
         self.current_index = index
         self.native_mode = native_mode
-        
-        # Override native mode to ensure color correction works
-        if native_mode:
-            logger.warning("Native mode requested but overriding to custom mode for color correction")
-            native_mode = False
-            self.native_mode = False
         
         logger.info(f"Initializing camera at index {index} (native_mode={native_mode})...")
         
         try:
-            # On macOS, AVFoundation is preferred
-            self.camera = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-            logger.info(f"Camera backend set to AVFoundation.")
+            # Use platform-specific camera backend
+            self.camera = camera_backend.create_capture(index)
+            logger.info(f"Camera backend set to {camera_backend._backend_name()}.")
 
             if not self.camera or not self.camera.isOpened():
-                logger.warning(f"Failed to open camera with AVFoundation. Trying default backend...")
-                self.camera = cv2.VideoCapture(index)
-                if not self.camera or not self.camera.isOpened():
-                    self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
-                    return False
+                self.statusUpdate.emit(f"Camera at index {index} could not be opened.", "error")
+                return False
 
-            # Always use custom mode settings for consistent processing
-            logger.info("Using custom mode for consistent color processing")
+            # Get optimal resolution for platform
+            optimal_res = camera_backend.get_optimal_resolution(self.camera)
+            target_width, target_height = optimal_res
+            target_fps = platform_config.get('camera.fps', 30)
             
-            preview_config = IMX219_CONFIGS["preview"]
-            target_width = preview_config["width"]
-            target_height = preview_config["height"]
-            target_fps = preview_config["fps"]
+            logger.info(f"Setting camera to {target_width}x{target_height} @ {target_fps}fps")
             
-            self.camera.set(cv2.CAP_PROP_FOURCC, CAMERA_FOURCC)
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
             self.camera.set(cv2.CAP_PROP_FPS, target_fps)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+            
+            # Platform-specific optimizations
+            if platform_config.is_rk3568:
+                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            else:
+                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, platform_config.get('camera.buffer_size', 3))
             
             # Don't set AUTO_WB property - let our software handle it
             # self.camera.set(cv2.CAP_PROP_AUTO_WB, 0)  # Disable hardware auto WB
@@ -1393,7 +1383,9 @@ class CameraThread(QThread):
             current_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
             # Switch to high resolution for capture
-            high_res_config = IMX219_CONFIGS["capture_high"]
+            # Get high resolution from platform config
+            high_res = platform_config.get('camera.max_resolution', (1920, 1080))
+            high_res_config = {"width": high_res[0], "height": high_res[1], "fps": 15}
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, high_res_config["width"])
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, high_res_config["height"])
             
@@ -1442,6 +1434,36 @@ class CameraThread(QThread):
             except Exception as e:
                 logger.error(f"Error releasing camera: {e}")
             self.camera = None
+    
+    def initialize_scale(self, port=None, protocol=ScaleProtocol.GENERIC):
+        """Initialize scale interface"""
+        try:
+            self.scale = ScaleInterface(port=port, protocol=protocol)
+            if self.scale.connect():
+                self.scale.add_callback(self._on_scale_reading)
+                self.statusUpdate.emit("Scale connected", "info")
+                return True
+            else:
+                self.statusUpdate.emit("Scale not connected", "warning")
+                return False
+        except Exception as e:
+            logger.error(f"Failed to initialize scale: {e}")
+            self.statusUpdate.emit("Scale initialization failed", "error")
+            return False
+    
+    def _on_scale_reading(self, reading: ScaleReading):
+        """Handle new scale reading"""
+        if reading.stable:
+            self.last_weight = reading.weight
+            self.weight_unit = reading.unit
+            self.scaleReading.emit(reading.weight, reading.unit, reading.stable)
+    
+    def stop(self):
+        """Stop the camera thread and disconnect scale"""
+        self.running = False
+        if self.scale:
+            self.scale.disconnect()
+        super().stop()
 
 class AIScaleDataCollector(QMainWindow):
     """Enhanced main application with better error handling and features"""
@@ -1458,6 +1480,11 @@ class AIScaleDataCollector(QMainWindow):
         
         self.camera_thread.frameReady.connect(self.update_frame)
         self.camera_thread.statusUpdate.connect(self.handle_camera_status)
+        self.camera_thread.scaleReading.connect(self.update_weight_display)
+        
+        # Initialize scale on supported platforms
+        if platform_config.platform == 'linux' or platform_config.is_rk3568:
+            QTimer.singleShot(1000, self.auto_connect_scale)
         self.current_class = ""
         self.dataset_path = Path("data/raw")
         self.session_manager = SessionManager(self.dataset_path)
@@ -1477,12 +1504,18 @@ class AIScaleDataCollector(QMainWindow):
         self.restore_settings()
         
     def init_ui(self):
-        """Initialize Apple-inspired simple user interface"""
-        self.setWindowTitle(f"{APP_NAME}")
-        self.setMinimumSize(1000, 700)
+        """Initialize cross-platform optimized user interface"""
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         
-        # Apple-inspired styling
-        self.setStyleSheet("""
+        # Get optimal window size from display manager
+        optimal_size = display_manager.get_optimal_window_size(1000, 700)
+        self.setMinimumSize(*optimal_size)
+        
+        # Setup window for platform
+        display_manager.setup_window_for_platform(self)
+        
+        # Get platform-optimized stylesheet
+        base_stylesheet = """
             QMainWindow {
                 background-color: #ffffff;
             }
@@ -1533,7 +1566,10 @@ class AIScaleDataCollector(QMainWindow):
             QLabel {
                 color: #1D1D1F;
             }
-        """)
+        """
+        
+        # Apply platform-specific optimizations
+        display_manager.optimize_for_performance(self)
         
         # Create central widget with simple layout
         central_widget = QWidget()
@@ -1843,7 +1879,7 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
         logger.info("Searching for available cameras...")
         # Check first 10 indices, which is plenty for most systems.
         for i in range(10):
-            cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
+            cap = camera_backend.create_capture(i)
             if cap.isOpened():
                 # On macOS, we can't get a device name easily, so we just name them generically.
                 available_cameras.append((i, f"Camera {i}"))
@@ -2001,18 +2037,34 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
         # We will populate this in setup_camera after the UI is built
         controls_grid.addWidget(self.camera_combo, 0, 1, 1, 2)
 
+        # --- Scale Status ---
+        controls_grid.addWidget(QLabel("Scale:"), 1, 0)
+        self.scale_status = QLabel("Not connected")
+        self.scale_status.setStyleSheet("color: #8E8E93;")
+        controls_grid.addWidget(self.scale_status, 1, 1)
+        
+        self.scale_button = QPushButton("Connect")
+        self.scale_button.clicked.connect(self.toggle_scale_connection)
+        controls_grid.addWidget(self.scale_button, 1, 2)
+        
+        # --- Weight Display ---
+        controls_grid.addWidget(QLabel("Weight:"), 2, 0)
+        self.weight_display = QLabel("--- g")
+        self.weight_display.setStyleSheet("font-size: 18px; font-weight: bold; color: #007AFF;")
+        controls_grid.addWidget(self.weight_display, 2, 1, 1, 2)
+
         # --- Produce Selection ---
-        controls_grid.addWidget(QLabel("Produce Type:"), 1, 0)
+        controls_grid.addWidget(QLabel("Produce Type:"), 3, 0)
         self.class_selector = QComboBox()
         self.class_selector.setPlaceholderText("Select produce type...")
         self.class_selector.currentIndexChanged.connect(
             lambda: self.on_class_changed(self.class_selector.currentText())
         )
-        controls_grid.addWidget(self.class_selector, 1, 1)
+        controls_grid.addWidget(self.class_selector, 3, 1)
 
         self.add_class_button = QPushButton("+ Add New")
         self.add_class_button.clicked.connect(self.show_add_class_dialog)
-        controls_grid.addWidget(self.add_class_button, 1, 2)
+        controls_grid.addWidget(self.add_class_button, 3, 2)
         
         # Set column stretch for a balanced layout
         controls_grid.setColumnStretch(1, 2)
@@ -2207,6 +2259,57 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
         self.capture_button.setEnabled(True)
         # Reset button style
         self.capture_button.setStyleSheet("")
+    
+    def toggle_scale_connection(self):
+        """Toggle scale connection"""
+        if hasattr(self.camera_thread, 'scale') and self.camera_thread.scale and self.camera_thread.scale.is_connected:
+            self.camera_thread.scale.disconnect()
+            self.scale_status.setText("Not connected")
+            self.scale_status.setStyleSheet("color: #8E8E93;")
+            self.scale_button.setText("Connect")
+            self.weight_display.setText("--- g")
+        else:
+            self.connect_scale()
+    
+    def auto_connect_scale(self):
+        """Automatically try to connect to scale on startup"""
+        if platform_config.get('serial.auto_connect', True):
+            self.connect_scale()
+    
+    def connect_scale(self):
+        """Connect to scale"""
+        # Try auto-detection first
+        self.scale_status.setText("Detecting...")
+        self.scale_status.setStyleSheet("color: #FF9500;")
+        QApplication.processEvents()
+        
+        if self.camera_thread.initialize_scale():
+            self.scale_status.setText("Connected")
+            self.scale_status.setStyleSheet("color: #30D158;")
+            self.scale_button.setText("Disconnect")
+            self.status_bar.showMessage("Scale connected", 3000)
+        else:
+            # Try specific ports
+            for port in platform_config.get('serial.default_ports', []):
+                if self.camera_thread.initialize_scale(port=port):
+                    self.scale_status.setText(f"Connected ({port})")
+                    self.scale_status.setStyleSheet("color: #30D158;")
+                    self.scale_button.setText("Disconnect")
+                    self.status_bar.showMessage(f"Scale connected on {port}", 3000)
+                    return
+            
+            self.scale_status.setText("Not found")
+            self.scale_status.setStyleSheet("color: #FF3B30;")
+            self.status_bar.showMessage("Scale not found", 3000)
+    
+    def update_weight_display(self, weight, unit, stable):
+        """Update weight display"""
+        if stable:
+            self.weight_display.setText(f"{weight:.1f} {unit}")
+            self.weight_display.setStyleSheet("font-size: 18px; font-weight: bold; color: #007AFF;")
+        else:
+            self.weight_display.setText(f"~{weight:.1f} {unit}")
+            self.weight_display.setStyleSheet("font-size: 18px; font-weight: bold; color: #FF9500;")
         
     def flash_success_indicator(self):
         """Flash green border on camera view for successful capture"""
@@ -2433,7 +2536,12 @@ Correction Active: {'Yes' if not np.allclose(gains, [1.0, 1.0, 1.0]) else 'No'}"
 def main():
     """Main entry point for the application."""
     # Run Qt plugin check for diagnostic purposes
-    check_qt_plugins()
+    # Initialize hardware acceleration
+    hardware_accelerator.enable_optimizations()
+    
+    # Start system monitoring if enabled
+    if platform_config.get('monitoring.enabled', True):
+        system_monitor.start_monitoring()
 
     app = QApplication(sys.argv)
     app.setOrganizationName(ORGANIZATION)

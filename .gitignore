@@ -1,3 +1,6 @@
+# AI-Scale Data Collector .gitignore
+# Version 2.3.0 - Cross-platform with RK3568 support
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,20 +22,25 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
+# Virtual Environments
 venv/
 env/
 ENV/
+.env
+.venv
 
-# IDE
+# IDE and Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.sublime-project
+.sublime-workspace
 
-# OS
+# OS Generated Files
 .DS_Store
 .DS_Store?
 ._*
@@ -40,27 +48,148 @@ ENV/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Data
+# Application Data
 data/raw/*
 data/processed/*
+data/temp/*
 !data/raw/.gitkeep
-!data/processed/.gitkeep
+!data/processed/.gitkeep  
+!data/temp/.gitkeep
 data/metadata.db
 data/metadata.db-*
+*.sqlite
+*.sqlite3
 
-# Config
+# Configuration Files
 config.json
+platform_config.json
+user_config.json
+.aiscale/
 
-# Models
-models/weights/*
-!models/weights/.gitkeep
-!models/weights/rknn_models/.gitkeep
-
-# Logs
+# Logs and Monitoring
 *.log
 logs/
+/var/log/aiscale/
+performance.log
+system_metrics.json
 
-# Temporary files
+# Hardware and Platform Specific
+# RK3568 specific files
+mali_*
+rockchip_*
+/dev/video*
+/dev/ttyUSB*
+/dev/ttyS*
+
+# Models and Weights
+models/weights/*
+models/rknn/*
+models/trained/*
+!models/weights/.gitkeep
+!models/rknn/.gitkeep
+!models/trained/.gitkeep
+*.rknn
+*.tflite
+*.onnx
+*.pb
+
+# Temporary Files
 *.tmp
-*.temp 
+*.temp
+.tmp/
+temp/
+/tmp/
+
+# Deployment
+deploy/
+deployment_logs/
+install.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation Build
+docs/_build/
+docs/build/
+site/
+
+# Backup Files
+*.bak
+*.backup
+*~
+
+# Scale Communication
+scale_calibration.json
+scale_debug.log
+
+# Camera Calibration
+camera_calibration/
+camera_profiles/
+
+# System Files (Linux/embedded)
+*.pid
+*.lock
+/run/
+/var/run/
+
+# Network and Security
+*.pem
+*.key
+*.crt
+certificates/
+secrets/
+
+# Performance Profiling
+*.prof
+*.profile
+profile_results/
+
+# Large Media Files (if any)
+*.mp4
+*.avi
+*.mov
+sample_images/
+test_datasets/
+
+# Package Management
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter Notebooks (if used for analysis)
+.ipynb_checkpoints/
+*.ipynb
+
+# Compilation
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Archives
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Local Development
+.env.local
+.env.development
+.env.test
+.env.production 

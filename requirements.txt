@@ -1,8 +1,25 @@
-# AI-Scale Data Collector v2.2.0
-# Status: Camera improvements implemented, blue tint issue pending resolution
-# Last updated: 2024-12-01
+# AI-Scale Data Collector v2.3.0
+# Cross-platform support with RK3568 optimizations
+# Last updated: 2024-12-24
 
+# Core GUI and Computer Vision
 PySide6>=6.5.0
 opencv-python>=4.8.0
 numpy>=1.24.0
 Pillow>=9.5.0
+
+# Serial communication for scale integration
+pyserial>=3.5
+
+# System monitoring and performance
+psutil>=5.9.0
+
+# Platform-specific packages (install based on platform)
+# For ARM Linux (RK3568):
+# opencv-python-headless>=4.8.0  # Lighter version for embedded
+# For x86 Linux with GPU:
+# opencv-contrib-python>=4.8.0   # Include additional modules
+
+# Development and testing
+pytest>=7.0.0
+pytest-qt>=4.2.0
