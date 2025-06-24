@@ -11,7 +11,7 @@
     "format": "jpg"
   },
   "camera_controls": {
-    "brightness": 7.0,
+    "brightness": 0.0,
     "contrast": 1.0,
     "gamma": 1.0,
     "saturation": 1.0,

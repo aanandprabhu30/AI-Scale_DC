@@ -62,8 +62,9 @@ class ImageProcessor:
     """Advanced image processing for color correction and enhancement"""
     
     def __init__(self):
-        self.clahe_bgr = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        self.clahe_lab = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        # Dramatic CLAHE for visible effect
+        self.clahe_bgr = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
+        self.clahe_lab = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
     
     def apply_white_balance(self, image: np.ndarray, temp_offset: float = 0.0) -> np.ndarray:
         """Apply white balance correction to reduce bluish haze"""
@@ -104,8 +105,9 @@ class ImageProcessor:
         if vibrance > 0:
             # Create mask for less saturated pixels
             mask = s < 128
-            s[mask] = cv2.add(s[mask], int(vibrance * 30))[mask]
-            s = np.clip(s, 0, 255).astype(np.uint8)
+            s = s.astype(np.int16)
+            s[mask] = np.clip(s[mask] + int(vibrance * 30), 0, 255)
+            s = s.astype(np.uint8)
         
         enhanced = cv2.merge([h, s, v])
         return cv2.cvtColor(enhanced, cv2.COLOR_HSV2BGR)
@@ -133,7 +135,13 @@ class ImageProcessor:
             l, a, b = cv2.split(lab)
             l_clahe = self.clahe_lab.apply(l)
             enhanced = cv2.merge([l_clahe, a, b])
-            return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+            lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+            # Also apply to BGR for extra drama
+            b, g, r = cv2.split(lab2bgr)
+            b = self.clahe_bgr.apply(b)
+            g = self.clahe_bgr.apply(g)
+            r = self.clahe_bgr.apply(r)
+            return cv2.merge([b, g, r])
         else:
             # Apply to each BGR channel
             b, g, r = cv2.split(image)
@@ -196,6 +204,7 @@ class CameraControlWidget(QWidget):
     
     def init_ui(self):
         layout = QVBoxLayout()
+        layout.setSpacing(18)
         
         # Image Enhancement Group
         enhance_group = QGroupBox("Image Enhancement")
@@ -276,11 +285,21 @@ class CameraControlWidget(QWidget):
         advanced_layout = QVBoxLayout()
         
         self.clahe_checkbox = QCheckBox("Enable CLAHE (Local Contrast)")
+        self.clahe_checkbox.setStyleSheet("font-weight: 700; color: #007aff; font-size: 17px; padding: 10px 0;")
+        self.clahe_checkbox.setToolTip("Very strong effect for demo purposes!")
         self.clahe_checkbox.stateChanged.connect(self.update_clahe)
         advanced_layout.addWidget(self.clahe_checkbox)
         
+        # CLAHE ON label
+        self.clahe_on_label = QLabel("CLAHE ON")
+        self.clahe_on_label.setStyleSheet("color: #fff; background: #b71c1c; font-weight: bold; padding: 4px 12px; border-radius: 8px;")
+        self.clahe_on_label.setAlignment(Qt.AlignCenter)
+        self.clahe_on_label.hide()
+        advanced_layout.addWidget(self.clahe_on_label)
+        
         # Reset button
         reset_btn = QPushButton("Reset All")
+        reset_btn.setStyleSheet("background: #f0f0f3; color: #007aff; font-weight: 600; font-size: 16px; border-radius: 8px; margin-top: 10px;")
         reset_btn.clicked.connect(self.reset_settings)
         advanced_layout.addWidget(reset_btn)
         
@@ -322,6 +341,11 @@ class CameraControlWidget(QWidget):
     
     def update_clahe(self, state):
         self.settings['clahe_enabled'] = state == Qt.Checked
+        # Show or hide CLAHE ON label
+        if self.settings['clahe_enabled']:
+            self.clahe_on_label.show()
+        else:
+            self.clahe_on_label.hide()
         self.settings_changed.emit(self.settings)
     
     def reset_settings(self):
@@ -385,6 +409,10 @@ class AIScaleMainWindow(QMainWindow):
         """Initialize the user interface"""
         self.setWindowTitle("AI-Scale Data Collector v2.4.0")
         self.setMinimumSize(1366, 768)
+        font = QFont()
+        font.setPointSize(15)
+        font.setFamily("-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif")
+        self.setFont(font)
         
         # Central widget with splitter
         central_widget = QWidget()
@@ -403,10 +431,33 @@ class AIScaleMainWindow(QMainWindow):
         camera_layout = QHBoxLayout()
         camera_layout.addWidget(QLabel("Camera:"))
         self.camera_combo = QComboBox()
+        self.camera_combo.setMinimumHeight(32)
+        self.camera_combo.setMaximumWidth(220)
+        self.camera_combo.setStyleSheet("font-size: 15px; padding: 4px 10px; border-radius: 8px;")
         self.camera_combo.currentIndexChanged.connect(self.change_camera)
         camera_layout.addWidget(self.camera_combo)
-        
+
         refresh_btn = QPushButton("Refresh")
+        refresh_btn.setMinimumHeight(32)
+        refresh_btn.setMaximumWidth(110)
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0a84ff;
+                color: #fff;
+                border: none;
+                border-radius: 10px;
+                font-size: 15px;
+                font-weight: 500;
+                padding: 6px 18px;
+                box-shadow: 0 2px 8px rgba(10,132,255,0.08);
+            }
+            QPushButton:hover {
+                background-color: #0066cc;
+            }
+            QPushButton:pressed {
+                background-color: #005bb5;
+            }
+        """)
         refresh_btn.clicked.connect(self.refresh_cameras)
         camera_layout.addWidget(refresh_btn)
         camera_layout.addStretch()
@@ -416,7 +467,7 @@ class AIScaleMainWindow(QMainWindow):
         # Camera display
         self.camera_label = QLabel()
         self.camera_label.setMinimumSize(800, 600)
-        self.camera_label.setStyleSheet("border: 1px solid gray; background-color: black;")
+        self.camera_label.setStyleSheet("border: 2px solid #e0e0e0; background-color: #fff; color: #222; border-radius: 18px;")
         self.camera_label.setAlignment(Qt.AlignCenter)
         self.camera_label.setText("No camera connected")
         left_layout.addWidget(self.camera_label)
@@ -425,8 +476,27 @@ class AIScaleMainWindow(QMainWindow):
         controls_layout = QHBoxLayout()
         
         self.capture_btn = QPushButton("Capture Image")
-        self.capture_btn.clicked.connect(self.capture_image)
         self.capture_btn.setMinimumHeight(40)
+        self.capture_btn.setMaximumWidth(220)
+        self.capture_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0a84ff;
+                color: #fff;
+                border: none;
+                border-radius: 12px;
+                font-size: 17px;
+                font-weight: 600;
+                padding: 10px 0;
+                box-shadow: 0 2px 12px rgba(10,132,255,0.10);
+            }
+            QPushButton:hover {
+                background-color: #0066cc;
+            }
+            QPushButton:pressed {
+                background-color: #005bb5;
+            }
+        """)
+        self.capture_btn.clicked.connect(self.capture_image)
         controls_layout.addWidget(self.capture_btn)
         
         # Scale reading display
@@ -442,11 +512,11 @@ class AIScaleMainWindow(QMainWindow):
         # Right panel - Controls
         self.control_panel = CameraControlWidget()
         self.control_panel.settings_changed.connect(self.update_image_settings)
-        self.control_panel.setMaximumWidth(350)
+        self.control_panel.setMaximumWidth(400)
         splitter.addWidget(self.control_panel)
         
         # Set splitter sizes (camera view gets more space)
-        splitter.setSizes([1000, 350])
+        splitter.setSizes([1000, 400])
         
         main_layout.addWidget(splitter)
         
@@ -455,71 +525,93 @@ class AIScaleMainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
         
-        # Apply dark theme optimized for the display
+        # Apply Apple-like light theme for clarity and elegance
         self.apply_theme()
     
     def apply_theme(self):
-        """Apply optimized theme for the 6-bit display"""
-        # Use colors that work well on limited gamut displays
+        """Apply Apple-like light theme for clarity and elegance"""
         self.setStyleSheet("""
+            * {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            }
             QMainWindow {
-                background-color: #2b2b2b;
-                color: #ffffff;
+                background: #f8f8fa;
+                color: #222;
             }
             QGroupBox {
-                font-weight: bold;
-                border: 2px solid #555555;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 5px;
+                font-weight: 600;
+                border: 1.5px solid #e0e0e0;
+                border-radius: 14px;
+                margin-top: 18px;
+                padding: 12px 18px 18px 18px;
+                background: #fff;
+                font-size: 18px;
+                letter-spacing: 0.5px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
+                left: 18px;
+                padding: 0 8px 0 8px;
+                font-size: 19px;
+                color: #222;
+                font-weight: 700;
             }
             QPushButton {
-                background-color: #404040;
-                border: 1px solid #606060;
-                padding: 5px;
-                border-radius: 3px;
-                min-height: 20px;
+                background-color: #007aff;
+                color: #fff;
+                border: none;
+                padding: 12px 0;
+                border-radius: 10px;
+                min-height: 36px;
+                font-size: 17px;
+                font-weight: 600;
+                margin-top: 8px;
             }
             QPushButton:hover {
-                background-color: #505050;
+                background-color: #005ecb;
             }
             QPushButton:pressed {
-                background-color: #303030;
+                background-color: #003e8a;
             }
             QSlider::groove:horizontal {
-                border: 1px solid #666666;
-                height: 8px;
-                background: #404040;
-                border-radius: 4px;
+                border: 1px solid #e0e0e0;
+                height: 10px;
+                background: #e9e9ef;
+                border-radius: 5px;
             }
             QSlider::handle:horizontal {
-                background: #888888;
-                border: 1px solid #666666;
-                width: 18px;
-                border-radius: 9px;
-                margin: -5px 0;
+                background: #007aff;
+                border: 1.5px solid #e0e0e0;
+                width: 26px;
+                border-radius: 13px;
+                margin: -8px 0;
             }
             QSlider::handle:horizontal:hover {
-                background: #aaaaaa;
+                background: #005ecb;
             }
             QComboBox {
-                background-color: #404040;
-                border: 1px solid #606060;
-                padding: 3px;
-                border-radius: 3px;
+                background-color: #fff;
+                color: #222;
+                border: 1.5px solid #e0e0e0;
+                padding: 6px;
+                border-radius: 8px;
+                font-size: 16px;
             }
             QLabel {
-                color: #ffffff;
+                color: #222;
+                font-size: 16px;
+                font-weight: 500;
             }
             QStatusBar {
-                background-color: #404040;
-                color: #ffffff;
-                border-top: 1px solid #606060;
+                background-color: #f0f0f3;
+                color: #222;
+                border-top: 1px solid #e0e0e0;
+                font-size: 15px;
+            }
+            QCheckBox {
+                font-size: 16px;
+                font-weight: 600;
+                padding: 8px 0;
             }
         """)
     
