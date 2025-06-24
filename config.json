@@ -11,12 +11,12 @@
     "format": "jpg"
   },
   "camera_controls": {
-    "brightness": 0.0,
+    "brightness": 7.0,
     "contrast": 1.0,
     "gamma": 1.0,
-    "white_balance": 0.0,
     "saturation": 1.0,
     "vibrance": 0.0,
+    "white_balance": 0.0,
     "clahe_enabled": false
   },
   "display_settings": {
