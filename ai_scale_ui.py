@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 """
-AI-Scale Data Collector UI v2.4.0
-Clean, production-ready interface optimized for RK3568 (1366x768)
-Addresses: bluish haze, brightness/contrast imbalance, color accuracy issues
-ARM64 optimized with PyQt5 fallback support
+AI-Scale Data Collector v2.4.0
+Desktop application for Rockchip RK3568 boards with camera/scale integration
 """
 
 import sys
 import os
-import cv2
 import json
-import time
+import cv2
 import numpy as np
-from pathlib import Path
 from datetime import datetime
-from typing import Optional, Tuple, Dict, Any
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+# Debug flag - set to False to disable debug output
+DEBUG = False
+
+# Suppress OpenCV warnings and errors
+os.environ['OPENCV_VIDEOIO_DEBUG'] = '0'
+os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
+cv2.setUseOptimized(True)
+
+# Suppress Qt warnings
+os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'
+
+try:
+    import serial
+    SCALE_AVAILABLE = True
+except ImportError:
+    SCALE_AVAILABLE = False
 
 # Try PySide6 first, fallback to PyQt5 for ARM64 compatibility
 try:
@@ -116,65 +130,57 @@ class ImageProcessor:
         """Apply gamma correction for brightness/contrast balance"""
         if image is None or image.size == 0 or gamma == 1.0:
             return image
-            
-        # Build lookup table
+        # Clamp gamma to avoid division by zero
+        gamma = max(gamma, 0.01)
         inv_gamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** inv_gamma) * 255 
                          for i in np.arange(0, 256)]).astype("uint8")
-        
         return cv2.LUT(image, table)
     
     def apply_clahe(self, image: np.ndarray, channel: str = 'lab') -> np.ndarray:
-<<<<<<< HEAD
-        print("[DEBUG] apply_clahe called - TEST: inverting image for pipeline check")
+        if DEBUG:
+            print("[DEBUG] apply_clahe called - TEST: inverting image for pipeline check")
         # Dramatic test effect: invert image to confirm pipeline
         return cv2.bitwise_not(image)
-=======
-        print("apply_clahe called")
-        if image is None or image.size == 0:
-            return image
-            
-        if channel == 'lab':
-            # Apply to L channel in LAB space
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            l_clahe = self.clahe_lab.apply(l)
-            enhanced = cv2.merge([l_clahe, a, b])
-            lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-            # Also apply to BGR for extra drama
-            b, g, r = cv2.split(lab2bgr)
-            b = self.clahe_bgr.apply(b)
-            g = self.clahe_bgr.apply(g)
-            r = self.clahe_bgr.apply(r)
-            return cv2.merge([b, g, r])
-        else:
-            # Apply to each BGR channel
-            b, g, r = cv2.split(image)
-            b_clahe = self.clahe_bgr.apply(b)
-            g_clahe = self.clahe_bgr.apply(g)
-            r_clahe = self.clahe_bgr.apply(r)
-            return cv2.merge([b_clahe, g_clahe, r_clahe])
->>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
+        # The real CLAHE code should be restored here after testing
+        # if image is None or image.size == 0:
+        #     return image
+        # if channel == 'lab':
+        #     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        #     l, a, b = cv2.split(lab)
+        #     l_clahe = self.clahe_lab.apply(l)
+        #     enhanced = cv2.merge([l_clahe, a, b])
+        #     lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+        #     b, g, r = cv2.split(lab2bgr)
+        #     b = self.clahe_bgr.apply(b)
+        #     g = self.clahe_bgr.apply(g)
+        #     r = self.clahe_bgr.apply(r)
+        #     return cv2.merge([b, g, r])
+        # else:
+        #     b, g, r = cv2.split(image)
+        #     b_clahe = self.clahe_bgr.apply(b)
+        #     g_clahe = self.clahe_bgr.apply(g)
+        #     r_clahe = self.clahe_bgr.apply(r)
+        #     return cv2.merge([b_clahe, g_clahe, r_clahe])
     
     def process_frame(self, image: np.ndarray, settings: Dict[str, float]) -> np.ndarray:
-        print(f"[DEBUG] process_frame called with clahe_enabled={settings.get('clahe_enabled', False)}")
+        if DEBUG:
+            print(f"[DEBUG] process_frame called with clahe_enabled={settings.get('clahe_enabled', False)}")
         if image is None or image.size == 0:
             return image
-<<<<<<< HEAD
-=======
-        
-        print("process_frame settings:", settings)
-        
->>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
         result = image.copy()
         # White balance correction (reduces bluish haze)
         if settings.get('white_balance', 0.0) != 0.0:
             result = self.apply_white_balance(result, settings['white_balance'])
-        # Brightness and contrast
-        if settings.get('brightness', 0.0) != 0.0 or settings.get('contrast', 1.0) != 1.0:
-            result = cv2.convertScaleAbs(result, 
-                                       alpha=settings.get('contrast', 1.0),
-                                       beta=settings.get('brightness', 0.0))
+        # Brightness and contrast (OpenCV: alpha=contrast, beta=brightness)
+        brightness_norm = settings.get('brightness', 0.0)  # -1.0 to +1.0
+        brightness = int(brightness_norm * 100)  # -100 to +100 for OpenCV beta
+        contrast = settings.get('contrast', 1.0)  # 0.0 to 2.0 for OpenCV alpha
+        contrast = max(contrast, 0.01)  # Prevent black screen at zero contrast
+        if brightness != 0 or contrast != 1.0:
+            # Midpoint-shift contrast for more intuitive effect
+            gray = np.full(result.shape, 128, result.dtype)
+            result = cv2.addWeighted(result, contrast, gray, 1 - contrast, brightness)
         # Gamma correction
         if settings.get('gamma', 1.0) != 1.0:
             result = self.apply_gamma_correction(result, settings['gamma'])
@@ -185,11 +191,8 @@ class ImageProcessor:
                                        settings.get('vibrance', 0.0))
         # CLAHE for local contrast
         if settings.get('clahe_enabled', False):
-<<<<<<< HEAD
-            print("[DEBUG] CLAHE branch entered in process_frame")
-=======
-            print("CLAHE ENABLED - applying CLAHE")
->>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
+            if DEBUG:
+                print("[DEBUG] CLAHE branch entered in process_frame")
             result = self.apply_clahe(result, 'lab')
         return result
 
@@ -356,7 +359,8 @@ class CameraControlWidget(QWidget):
         self.settings_changed.emit(self.get_settings())
     
     def update_clahe(self, state):
-        print(f"[DEBUG] update_clahe called with state={state}")
+        if DEBUG:
+            print(f"[DEBUG] update_clahe called with state={state}")
         self.settings['clahe_enabled'] = state == Qt.Checked
         # Show or hide CLAHE ON label
         if self.settings['clahe_enabled']:
@@ -400,10 +404,6 @@ class CameraControlWidget(QWidget):
             self.clahe_checkbox.setChecked(settings_dict['clahe_enabled'])
     
     def get_settings(self):
-<<<<<<< HEAD
-=======
-        """Get current settings dictionary, always reflecting the UI state."""
->>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
         settings = self.settings.copy()
         settings['clahe_enabled'] = self.clahe_checkbox.isChecked()
         return settings
@@ -440,7 +440,7 @@ class AIScaleMainWindow(QMainWindow):
         self.setMinimumSize(1366, 768)
         font = QFont()
         font.setPointSize(15)
-        font.setFamily("-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif")
+        font.setFamily("Arial, Helvetica, sans-serif")
         self.setFont(font)
         
         # Central widget with splitter
@@ -478,7 +478,6 @@ class AIScaleMainWindow(QMainWindow):
                 font-size: 15px;
                 font-weight: 500;
                 padding: 6px 18px;
-                box-shadow: 0 2px 8px rgba(10,132,255,0.08);
             }
             QPushButton:hover {
                 background-color: #0066cc;
@@ -525,7 +524,6 @@ class AIScaleMainWindow(QMainWindow):
                 font-size: 17px;
                 font-weight: 600;
                 padding: 10px 0;
-                box-shadow: 0 2px 12px rgba(10,132,255,0.10);
             }
             QPushButton:hover {
                 background-color: #0066cc;
@@ -570,7 +568,7 @@ class AIScaleMainWindow(QMainWindow):
         """Apply Apple-like light theme for clarity and elegance"""
         self.setStyleSheet("""
             * {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+                font-family: Arial, Helvetica, sans-serif;
             }
             QMainWindow {
                 background: #f8f8fa;
@@ -730,14 +728,9 @@ class AIScaleMainWindow(QMainWindow):
             self.camera_info_label.setText("Camera: Error connecting")
     
     def update_image_settings(self, settings):
-<<<<<<< HEAD
-        print(f"process_frame settings: {settings}")
-        self.current_settings = settings.copy()  # Fix: always copy to avoid reference issues
-=======
-        """Update image processing settings"""
-        self.current_settings = self.control_panel.get_settings()
-        self.update_frame()
->>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
+        if DEBUG:
+            print(f"process_frame settings: {settings}")
+        self.current_settings = settings.copy()
     
     def update_frame(self):
         """Update camera frame"""
@@ -750,7 +743,8 @@ class AIScaleMainWindow(QMainWindow):
         frame = self.camera_backend.apply_profile_image_processing(frame, self.current_camera_index)
         # Always fetch the latest settings from the control panel
         settings = self.control_panel.get_settings()
-        print(f"[DEBUG] update_frame using settings: {settings}")
+        if DEBUG:
+            print(f"[DEBUG] update_frame using settings: {settings}")
         frame = self.image_processor.process_frame(frame, settings)
         self.current_frame = frame
         # Convert to Qt format and display

@@ -122,7 +122,7 @@ class ScaleInterface:
             except Exception as e:
                 logger.debug(f"Failed to check port {port}: {e}")
                 
-        logger.warning("No scale detected on any serial port")
+        logger.debug("No scale detected on any serial port")
         return None
     
     def list_serial_ports(self) -> List[Dict[str, str]]:

@@ -9,6 +9,10 @@ from typing import List, Dict, Optional, Tuple, Any
 import logging
 from pathlib import Path
 
+# Suppress OpenCV warnings during camera enumeration
+os.environ['OPENCV_VIDEOIO_DEBUG'] = '0'
+os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
+
 logger = logging.getLogger(__name__)
 
 class CameraProfile:
