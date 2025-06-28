@@ -62,9 +62,9 @@ class ImageProcessor:
     """Advanced image processing for color correction and enhancement"""
     
     def __init__(self):
-        # Dramatic CLAHE for visible effect
-        self.clahe_bgr = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
-        self.clahe_lab = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
+        # Natural CLAHE for visually pleasing local contrast
+        self.clahe_bgr = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        self.clahe_lab = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     
     def apply_white_balance(self, image: np.ndarray, temp_offset: float = 0.0) -> np.ndarray:
         """Apply white balance correction to reduce bluish haze"""
@@ -125,14 +125,47 @@ class ImageProcessor:
         return cv2.LUT(image, table)
     
     def apply_clahe(self, image: np.ndarray, channel: str = 'lab') -> np.ndarray:
+<<<<<<< HEAD
         print("[DEBUG] apply_clahe called - TEST: inverting image for pipeline check")
         # Dramatic test effect: invert image to confirm pipeline
         return cv2.bitwise_not(image)
+=======
+        print("apply_clahe called")
+        if image is None or image.size == 0:
+            return image
+            
+        if channel == 'lab':
+            # Apply to L channel in LAB space
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l_clahe = self.clahe_lab.apply(l)
+            enhanced = cv2.merge([l_clahe, a, b])
+            lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+            # Also apply to BGR for extra drama
+            b, g, r = cv2.split(lab2bgr)
+            b = self.clahe_bgr.apply(b)
+            g = self.clahe_bgr.apply(g)
+            r = self.clahe_bgr.apply(r)
+            return cv2.merge([b, g, r])
+        else:
+            # Apply to each BGR channel
+            b, g, r = cv2.split(image)
+            b_clahe = self.clahe_bgr.apply(b)
+            g_clahe = self.clahe_bgr.apply(g)
+            r_clahe = self.clahe_bgr.apply(r)
+            return cv2.merge([b_clahe, g_clahe, r_clahe])
+>>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
     
     def process_frame(self, image: np.ndarray, settings: Dict[str, float]) -> np.ndarray:
         print(f"[DEBUG] process_frame called with clahe_enabled={settings.get('clahe_enabled', False)}")
         if image is None or image.size == 0:
             return image
+<<<<<<< HEAD
+=======
+        
+        print("process_frame settings:", settings)
+        
+>>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
         result = image.copy()
         # White balance correction (reduces bluish haze)
         if settings.get('white_balance', 0.0) != 0.0:
@@ -152,7 +185,11 @@ class ImageProcessor:
                                        settings.get('vibrance', 0.0))
         # CLAHE for local contrast
         if settings.get('clahe_enabled', False):
+<<<<<<< HEAD
             print("[DEBUG] CLAHE branch entered in process_frame")
+=======
+            print("CLAHE ENABLED - applying CLAHE")
+>>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
             result = self.apply_clahe(result, 'lab')
         return result
 
@@ -363,6 +400,10 @@ class CameraControlWidget(QWidget):
             self.clahe_checkbox.setChecked(settings_dict['clahe_enabled'])
     
     def get_settings(self):
+<<<<<<< HEAD
+=======
+        """Get current settings dictionary, always reflecting the UI state."""
+>>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
         settings = self.settings.copy()
         settings['clahe_enabled'] = self.clahe_checkbox.isChecked()
         return settings
@@ -651,15 +692,23 @@ class AIScaleMainWindow(QMainWindow):
                     # Update status with camera model info
                     self.status_bar.showMessage(f"{profile.name} connected")
                     
-                    # Update camera info label
+                    # Update camera info label with detailed specifications
                     sensor_info = profile.sensor
                     max_res = profile.get_max_resolution()
-                    self.camera_info_label.setText(
-                        f"Camera: {profile.model} | "
-                        f"Sensor: {sensor_info.get('model', 'Unknown')} {sensor_info.get('size', '')} | "
-                        f"Max: {max_res[0]}×{max_res[1]} | "
+                    optimal_res = profile.get_optimal_resolution(1366)
+                    
+                    # Build detailed camera info string
+                    camera_details = [
+                        f"Camera: {profile.model}",
+                        f"Sensor: {sensor_info.get('model', 'Unknown')} {sensor_info.get('size', '')}",
+                        f"FOV: {sensor_info.get('fov', 'Unknown')}",
+                        f"Focus: {sensor_info.get('focus', 'Unknown')}",
+                        f"IR Filter: {'Yes' if sensor_info.get('ir_filter', False) else 'No'}",
+                        f"Max: {max_res[0]}×{max_res[1]}",
                         f"Current: {optimal_res[0]}×{optimal_res[1]}"
-                    )
+                    ]
+                    
+                    self.camera_info_label.setText(" | ".join(camera_details))
                     
                     # Apply profile's white balance offset to current settings
                     if hasattr(self, 'control_panel') and profile.image_processing:
@@ -681,8 +730,14 @@ class AIScaleMainWindow(QMainWindow):
             self.camera_info_label.setText("Camera: Error connecting")
     
     def update_image_settings(self, settings):
+<<<<<<< HEAD
         print(f"process_frame settings: {settings}")
         self.current_settings = settings.copy()  # Fix: always copy to avoid reference issues
+=======
+        """Update image processing settings"""
+        self.current_settings = self.control_panel.get_settings()
+        self.update_frame()
+>>>>>>> 7390f04af18fa827e5fb717cf2a985925d9df5a7
     
     def update_frame(self):
         """Update camera frame"""

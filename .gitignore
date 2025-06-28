@@ -179,3 +179,17 @@ pip-delete-this-directory.txt
 deploy/
 deployment_logs/
 install.log
+
+# Camera calibration and configuration files
+camera_calibration_*.json
+camera_calibration_*.xml
+camera_calibration_*.yaml
+camera_settings_*.json
+camera_profiles_local.json
+camera_calibration_data/
+camera_test_images/
+
+# Camera-specific temporary files
+*.camera_test
+*.camera_debug
+camera_logs/

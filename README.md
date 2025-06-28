@@ -26,6 +26,7 @@ python run_ai_scale.py
 - **Scale Integration**: USB/RS232 scale communication with auto-detection
 - **Hardware Optimized**: RK3568-specific optimizations for 1366×768 displays
 - **Settings Persistence**: Automatic save/load of user preferences
+- **Enhanced Camera Info**: Detailed sensor specifications and capabilities display
 
 ## 📋 Hardware Requirements
 
@@ -36,20 +37,27 @@ python run_ai_scale.py
 ### Supported Cameras
 
 1. **Arducam 8MP 1080P USB Camera Module (B0196)**
-   - Sensor: 1/4" CMOS IMX219
-   - Max Resolution: 3280×2464 (8MP)
-   - USB VID/PID: 0x0bda:0x5830
-   - Features: Fixed focus, no IR filter, wide dynamic range
+   - **Sensor**: 1/4" CMOS IMX219
+   - **Max Resolution**: 3280×2464 (8MP)
+   - **USB VID/PID**: 0x0bda:0x5830
+   - **Features**: Fixed focus (3.6mm), no IR filter, wide dynamic range
+   - **Optimal Format**: MJPEG for RK3568 performance
+   - **FOV**: 65° field of view
+   - **Color Processing**: Enhanced for low-light conditions
 
 2. **JSK-S8130-V3.0 Camera Module**
-   - Sensor: 1/2.5" CMOS OV5648
-   - Max Resolution: 2592×1944 (5MP)
-   - USB VID/PID: 0x1bcf:0x2c99
-   - Features: Auto focus, built-in IR filter, optimized for daylight
+   - **Sensor**: 1/2.5" CMOS OV5648
+   - **Max Resolution**: 2592×1944 (5MP)
+   - **USB VID/PID**: 0x1bcf:0x2c99
+   - **Features**: Auto focus, built-in IR filter, optimized for daylight
+   - **Optimal Format**: YUYV for color fidelity
+   - **FOV**: 70° field of view
+   - **Color Processing**: Enhanced for accurate color reproduction
 
 3. **Generic USB Cameras**
    - Automatic fallback for any USB camera
    - Standard resolution support up to 1080p
+   - Basic image processing pipeline
 
 ## 🛠️ Installation
 
@@ -99,6 +107,29 @@ AI-Scale/
    - **CLAHE**: Enable local contrast enhancement
 5. **Capture**: Click "Capture Image" for full-resolution photos
 
+## 📷 Camera Detection
+
+The application automatically detects supported camera models via USB VID/PID:
+
+### Detection Methods
+
+- **Linux**: Uses `lsusb -v` to scan USB devices
+- **Windows**: Uses `wmic` to query USB device IDs  
+- **macOS**: Uses `system_profiler` to enumerate USB devices
+
+### Supported VID/PID Combinations
+
+- **Arducam B0196**: `0x0bda:0x5830`
+- **JSK-S8130-V3.0**: `0x1bcf:0x2c99`
+
+### Camera Profile Features
+
+- **Auto-detection**: Automatically identifies camera model
+- **Optimal Settings**: Applies camera-specific brightness, contrast, saturation
+- **Format Selection**: Chooses optimal video format (MJPEG/YUYV)
+- **Image Processing**: Camera-specific color correction and enhancement
+- **Resolution Optimization**: Selects best resolution for RK3568 display
+
 ## 📸 Captured Data
 
 Each capture creates:
@@ -119,8 +150,20 @@ Each capture creates:
 ### Camera Issues
 
 ```bash
+# List all video devices
 v4l2-ctl --list-devices
 ls -l /dev/video*
+
+# Check USB camera detection
+lsusb | grep -i camera
+lsusb -v | grep -A 5 -B 5 "0bda\|1bcf"
+
+# Test camera backend
+python3 -c "from camera_backend import CameraBackend; print(CameraBackend().enumerate_cameras())"
+
+# Check camera permissions (Linux)
+sudo usermod -a -G video $USER
+sudo chmod 666 /dev/video*
 ```
 
 ### Scale Issues
@@ -141,6 +184,10 @@ sudo apt-get install python3-pyqt5
 # Performance check
 cat /proc/cpuinfo | grep -i rockchip
 free -h
+
+# Camera performance optimization
+echo 'options uvcvideo timeout=5000' | sudo tee -a /etc/modprobe.d/uvcvideo.conf
+sudo modprobe -r uvcvideo && sudo modprobe uvcvideo
 ```
 
 ## 🧪 Development

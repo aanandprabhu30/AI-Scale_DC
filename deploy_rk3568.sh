@@ -50,18 +50,40 @@ fi
 # Check for specific camera models
 echo "🔍 Checking for supported camera models..."
 if command -v lsusb &> /dev/null; then
+    echo "Scanning USB devices for supported cameras..."
+    
     # Check for Arducam B0196
     if lsusb | grep -q "0bda:5830"; then
         echo "✅ Detected: Arducam 8MP 1080P USB Camera Module (B0196)"
-        echo "   - Sensor: IMX219 (3280×2464)"
-        echo "   - Applying optimized settings"
+        echo "   - Sensor: IMX219 (3280×2464, 1/4\" CMOS)"
+        echo "   - Features: Fixed focus, no IR filter, wide dynamic range"
+        echo "   - Optimal format: MJPEG for RK3568 performance"
+        echo "   - Applying optimized settings for embedded use"
     fi
     
     # Check for JSK-S8130-V3.0
     if lsusb | grep -q "1bcf:2c99"; then
         echo "✅ Detected: JSK-S8130-V3.0 Camera Module"
-        echo "   - Sensor: OV5648 (2592×1944)"
-        echo "   - Applying optimized settings"
+        echo "   - Sensor: OV5648 (2592×1944, 1/2.5\" CMOS)"
+        echo "   - Features: Auto focus, built-in IR filter, good color accuracy"
+        echo "   - Optimal format: YUYV for color fidelity"
+        echo "   - Applying optimized settings for daylight conditions"
+    fi
+    
+    # Check for other USB cameras
+    camera_count=$(lsusb | grep -i camera | wc -l)
+    if [ $camera_count -gt 0 ]; then
+        echo "📷 Found $camera_count additional USB camera(s):"
+        lsusb | grep -i camera | while read line; do
+            echo "   - $line"
+        done
+    fi
+    
+    # No supported cameras found
+    if ! lsusb | grep -q "0bda:5830" && ! lsusb | grep -q "1bcf:2c99"; then
+        echo "⚠️  No supported camera models detected"
+        echo "   Supported models: Arducam B0196, JSK-S8130-V3.0"
+        echo "   Generic USB cameras will work with basic settings"
     fi
 else
     echo "⚠️  lsusb not available, cannot detect specific camera models"
