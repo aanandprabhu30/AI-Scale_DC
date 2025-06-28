@@ -1,15 +1,4 @@
 {
-  "_version": "2.4.0",
-  "_status": "Production ready for RK3568 deployment with enhanced camera support",
-  "_last_updated": "24 January 2025",
-  "_description": "AI-Scale Data Collector configuration file with Arducam B0196 and JSK-S8130-V3.0 support",
-  "last_camera_index": 0,
-  "window_geometry": null,
-  "save_options": {
-    "create_preview": false,
-    "quality": 95,
-    "format": "jpg"
-  },
   "camera_controls": {
     "brightness": 0.0,
     "contrast": 1.0,
@@ -18,35 +7,5 @@
     "vibrance": 0.0,
     "white_balance": 0.0,
     "clahe_enabled": false
-  },
-  "display_settings": {
-    "theme": "dark",
-    "optimized_for": "rk3568_1366x768"
-  },
-  "camera_profiles": {
-    "enabled": true,
-    "auto_detect": true,
-    "default_profile": "generic",
-    "override_settings": false,
-    "detection_logging": true,
-    "profile_specific_processing": true
-  },
-  "supported_cameras": {
-    "arducam_b0196": {
-      "name": "Arducam 8MP 1080P USB Camera Module",
-      "model": "B0196",
-      "vendor_id": "0x0bda",
-      "product_id": "0x5830",
-      "sensor": "IMX219 1/4\" CMOS",
-      "max_resolution": "3280\u00d72464"
-    },
-    "jsk_s8130_v3": {
-      "name": "JSK-S8130-V3.0 Camera Module",
-      "model": "JSK-S8130-V3.0",
-      "vendor_id": "0x1bcf",
-      "product_id": "0x2c99",
-      "sensor": "OV5648 1/2.5\" CMOS",
-      "max_resolution": "2592\u00d71944"
-    }
   }
 }
