@@ -13,14 +13,18 @@
         "max_resolution": {
           "width": 3280,
           "height": 2464
-        }
+        },
+        "aspect_ratio": "4:3",
+        "fov": "65°",
+        "focus": "Fixed (3.6mm)",
+        "ir_filter": false
       },
       "supported_resolutions": [
-        {"width": 3280, "height": 2464, "fps": 15, "name": "8MP"},
-        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
-        {"width": 1640, "height": 1232, "fps": 30, "name": "1640x1232"},
-        {"width": 1280, "height": 720, "fps": 60, "name": "720p"},
-        {"width": 640, "height": 480, "fps": 90, "name": "VGA"}
+        {"width": 3280, "height": 2464, "fps": 15, "name": "8MP", "format": "MJPG"},
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p", "format": "MJPG"},
+        {"width": 1640, "height": 1232, "fps": 30, "name": "1640x1232", "format": "MJPG"},
+        {"width": 1280, "height": 720, "fps": 60, "name": "720p", "format": "MJPG"},
+        {"width": 640, "height": 480, "fps": 90, "name": "VGA", "format": "MJPG"}
       ],
       "optimal_settings": {
         "brightness": 0,
@@ -30,20 +34,34 @@
         "exposure": "auto",
         "white_balance": "auto",
         "gain": "auto",
-        "format": "MJPG"
+        "format": "MJPG",
+        "fps": 30,
+        "buffer_size": 1
       },
       "image_processing": {
         "needs_color_correction": true,
         "white_balance_offset": 0.5,
         "gamma_correction": 1.1,
-        "denoise_strength": 0.3
+        "denoise_strength": 0.3,
+        "color_temperature": 6500,
+        "tint": 0.0,
+        "vibrance_boost": 0.2,
+        "shadow_recovery": 0.1,
+        "highlight_protection": 0.05
       },
       "features": [
-        "Fixed focus lens",
-        "No IR filter",
+        "Fixed focus lens (3.6mm)",
+        "No IR filter (good for low light)",
         "Wide dynamic range",
-        "Low light sensitivity"
-      ]
+        "Low light sensitivity",
+        "MJPEG hardware encoding",
+        "USB 2.0 interface"
+      ],
+      "calibration": {
+        "color_matrix": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "lens_distortion": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "exposure_compensation": 0.0
+      }
     },
     "jsk_s8130_v3": {
       "name": "JSK-S8130-V3.0 Camera Module",
@@ -58,14 +76,18 @@
         "max_resolution": {
           "width": 2592,
           "height": 1944
-        }
+        },
+        "aspect_ratio": "4:3",
+        "fov": "70°",
+        "focus": "Auto focus",
+        "ir_filter": true
       },
       "supported_resolutions": [
-        {"width": 2592, "height": 1944, "fps": 15, "name": "5MP"},
-        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
-        {"width": 1280, "height": 960, "fps": 30, "name": "960p"},
-        {"width": 1280, "height": 720, "fps": 30, "name": "720p"},
-        {"width": 640, "height": 480, "fps": 30, "name": "VGA"}
+        {"width": 2592, "height": 1944, "fps": 15, "name": "5MP", "format": "YUYV"},
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p", "format": "YUYV"},
+        {"width": 1280, "height": 960, "fps": 30, "name": "960p", "format": "YUYV"},
+        {"width": 1280, "height": 720, "fps": 30, "name": "720p", "format": "YUYV"},
+        {"width": 640, "height": 480, "fps": 30, "name": "VGA", "format": "YUYV"}
       ],
       "optimal_settings": {
         "brightness": 5,
@@ -75,20 +97,34 @@
         "exposure": -5,
         "white_balance": "auto",
         "gain": 50,
-        "format": "YUYV"
+        "format": "YUYV",
+        "fps": 30,
+        "buffer_size": 2
       },
       "image_processing": {
         "needs_color_correction": true,
         "white_balance_offset": -0.3,
         "gamma_correction": 0.95,
-        "denoise_strength": 0.5
+        "denoise_strength": 0.5,
+        "color_temperature": 5500,
+        "tint": 0.1,
+        "vibrance_boost": 0.3,
+        "shadow_recovery": 0.2,
+        "highlight_protection": 0.1
       },
       "features": [
-        "Auto focus",
-        "Built-in IR filter",
+        "Auto focus capability",
+        "Built-in IR filter (better color accuracy)",
         "Good color reproduction",
-        "Optimized for daylight"
-      ]
+        "Optimized for daylight conditions",
+        "YUYV uncompressed format",
+        "USB 2.0 interface"
+      ],
+      "calibration": {
+        "color_matrix": [1.05, -0.05, 0.0, -0.02, 1.02, 0.0, 0.0, 0.0, 1.0],
+        "lens_distortion": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "exposure_compensation": -0.1
+      }
     },
     "generic": {
       "name": "Generic USB Camera",
@@ -103,12 +139,16 @@
         "max_resolution": {
           "width": 1920,
           "height": 1080
-        }
+        },
+        "aspect_ratio": "16:9",
+        "fov": "Unknown",
+        "focus": "Unknown",
+        "ir_filter": "Unknown"
       },
       "supported_resolutions": [
-        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
-        {"width": 1280, "height": 720, "fps": 30, "name": "720p"},
-        {"width": 640, "height": 480, "fps": 30, "name": "VGA"}
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p", "format": "MJPG"},
+        {"width": 1280, "height": 720, "fps": 30, "name": "720p", "format": "MJPG"},
+        {"width": 640, "height": 480, "fps": 30, "name": "VGA", "format": "MJPG"}
       ],
       "optimal_settings": {
         "brightness": 0,
@@ -118,29 +158,56 @@
         "exposure": "auto",
         "white_balance": "auto",
         "gain": "auto",
-        "format": "MJPG"
+        "format": "MJPG",
+        "fps": 30,
+        "buffer_size": 1
       },
       "image_processing": {
         "needs_color_correction": false,
         "white_balance_offset": 0.0,
         "gamma_correction": 1.0,
-        "denoise_strength": 0.0
+        "denoise_strength": 0.0,
+        "color_temperature": 6500,
+        "tint": 0.0,
+        "vibrance_boost": 0.0,
+        "shadow_recovery": 0.0,
+        "highlight_protection": 0.0
       },
-      "features": []
+      "features": [],
+      "calibration": {
+        "color_matrix": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "lens_distortion": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "exposure_compensation": 0.0
+      }
     }
   },
   "detection_methods": {
     "linux": {
       "command": "lsusb -v",
-      "parse_method": "usb_descriptor"
+      "parse_method": "usb_descriptor",
+      "vid_pid_patterns": {
+        "arducam_b0196": ["0bda:5830", "idVendor.*0x0bda.*idProduct.*0x5830"],
+        "jsk_s8130_v3": ["1bcf:2c99", "idVendor.*0x1bcf.*idProduct.*0x2c99"]
+      }
     },
     "windows": {
       "command": "wmic path Win32_USBHub get DeviceID,PNPDeviceID",
-      "parse_method": "wmi"
+      "parse_method": "wmi",
+      "vid_pid_patterns": {
+        "arducam_b0196": ["VID_0BDA&PID_5830"],
+        "jsk_s8130_v3": ["VID_1BCF&PID_2C99"]
+      }
     },
     "darwin": {
       "command": "system_profiler SPUSBDataType",
-      "parse_method": "system_profiler"
+      "parse_method": "system_profiler",
+      "vid_pid_patterns": {
+        "arducam_b0196": ["0x0bda", "0x5830"],
+        "jsk_s8130_v3": ["0x1bcf", "0x2c99"]
+      }
     }
-  }
+  },
+  "version": "2.4.0",
+  "last_updated": "2025-01-24",
+  "description": "Camera profiles for AI-Scale Data Collector with Arducam B0196 and JSK-S8130-V3.0 support"
 }

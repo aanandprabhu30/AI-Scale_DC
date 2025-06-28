@@ -97,27 +97,31 @@ class CameraBackend:
                 # Use lsusb to get USB device info
                 result = subprocess.run(['lsusb', '-v'], capture_output=True, text=True)
                 if result.returncode == 0:
-                    # Parse for known VID/PID combinations
-                    for line in result.stdout.split('\n'):
-                        # Check for Arducam B0196
-                        if '0bda:5830' in line or 'idVendor.*0x0bda.*idProduct.*0x5830' in line:
-                            profile_key = 'arducam_b0196'
-                            break
-                        # Check for JSK-S8130-V3.0
-                        elif '1bcf:2c99' in line or 'idVendor.*0x1bcf.*idProduct.*0x2c99' in line:
-                            profile_key = 'jsk_s8130_v3'
-                            break
+                    # Parse for known VID/PID combinations using patterns from profiles
+                    usb_output = result.stdout.lower()
+                    
+                    # Check for Arducam B0196 patterns
+                    if any(pattern in usb_output for pattern in ['0bda:5830', 'idvendor.*0x0bda.*idproduct.*0x5830']):
+                        profile_key = 'arducam_b0196'
+                        logger.info("Detected Arducam B0196 camera via USB VID/PID")
+                    # Check for JSK-S8130-V3.0 patterns
+                    elif any(pattern in usb_output for pattern in ['1bcf:2c99', 'idvendor.*0x1bcf.*idproduct.*0x2c99']):
+                        profile_key = 'jsk_s8130_v3'
+                        logger.info("Detected JSK-S8130-V3.0 camera via USB VID/PID")
             
             elif self.platform == 'darwin':
                 # Use system_profiler on macOS
                 result = subprocess.run(['system_profiler', 'SPUSBDataType'], 
                                       capture_output=True, text=True)
                 if result.returncode == 0:
-                    # Parse for known VID/PID
-                    if '0x0bda' in result.stdout and '0x5830' in result.stdout:
+                    # Parse for known VID/PID patterns
+                    profiler_output = result.stdout.lower()
+                    if '0x0bda' in profiler_output and '0x5830' in profiler_output:
                         profile_key = 'arducam_b0196'
-                    elif '0x1bcf' in result.stdout and '0x2c99' in result.stdout:
+                        logger.info("Detected Arducam B0196 camera via system_profiler")
+                    elif '0x1bcf' in profiler_output and '0x2c99' in profiler_output:
                         profile_key = 'jsk_s8130_v3'
+                        logger.info("Detected JSK-S8130-V3.0 camera via system_profiler")
             
             elif self.platform == 'windows':
                 # Use wmic on Windows
@@ -125,14 +129,22 @@ class CameraBackend:
                                        'DeviceID,PNPDeviceID'], 
                                       capture_output=True, text=True)
                 if result.returncode == 0:
-                    # Parse for known VID/PID
-                    if 'VID_0BDA&PID_5830' in result.stdout:
+                    # Parse for known VID/PID patterns
+                    wmic_output = result.stdout.upper()
+                    if 'VID_0BDA&PID_5830' in wmic_output:
                         profile_key = 'arducam_b0196'
-                    elif 'VID_1BCF&PID_2C99' in result.stdout:
+                        logger.info("Detected Arducam B0196 camera via WMIC")
+                    elif 'VID_1BCF&PID_2C99' in wmic_output:
                         profile_key = 'jsk_s8130_v3'
+                        logger.info("Detected JSK-S8130-V3.0 camera via WMIC")
         
         except Exception as e:
             logger.debug(f"Error detecting USB camera: {e}")
+        
+        if profile_key:
+            logger.info(f"Camera detection successful: {profile_key}")
+        else:
+            logger.debug("No specific camera model detected, using generic profile")
         
         return profile_key
     

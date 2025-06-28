@@ -670,15 +670,23 @@ class AIScaleMainWindow(QMainWindow):
                     # Update status with camera model info
                     self.status_bar.showMessage(f"{profile.name} connected")
                     
-                    # Update camera info label
+                    # Update camera info label with detailed specifications
                     sensor_info = profile.sensor
                     max_res = profile.get_max_resolution()
-                    self.camera_info_label.setText(
-                        f"Camera: {profile.model} | "
-                        f"Sensor: {sensor_info.get('model', 'Unknown')} {sensor_info.get('size', '')} | "
-                        f"Max: {max_res[0]}×{max_res[1]} | "
+                    optimal_res = profile.get_optimal_resolution(1366)
+                    
+                    # Build detailed camera info string
+                    camera_details = [
+                        f"Camera: {profile.model}",
+                        f"Sensor: {sensor_info.get('model', 'Unknown')} {sensor_info.get('size', '')}",
+                        f"FOV: {sensor_info.get('fov', 'Unknown')}",
+                        f"Focus: {sensor_info.get('focus', 'Unknown')}",
+                        f"IR Filter: {'Yes' if sensor_info.get('ir_filter', False) else 'No'}",
+                        f"Max: {max_res[0]}×{max_res[1]}",
                         f"Current: {optimal_res[0]}×{optimal_res[1]}"
-                    )
+                    ]
+                    
+                    self.camera_info_label.setText(" | ".join(camera_details))
                     
                     # Apply profile's white balance offset to current settings
                     if hasattr(self, 'control_panel') and profile.image_processing:
