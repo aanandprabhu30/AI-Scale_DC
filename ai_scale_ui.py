@@ -385,6 +385,12 @@ class CameraControlWidget(QWidget):
     def get_settings(self):
         """Get current settings dictionary"""
         return self.settings.copy()
+    
+    def set_white_balance(self, value):
+        """Set white balance value programmatically"""
+        self.wb_slider.setValue(int(value * 10))
+        self.settings['white_balance'] = value
+        self.settings_changed.emit(self.settings)
 
 
 class AIScaleMainWindow(QMainWindow):
@@ -397,6 +403,7 @@ class AIScaleMainWindow(QMainWindow):
         self.image_processor = ImageProcessor()
         self.current_frame = None
         self.current_settings = {}
+        self.current_camera_index = 0
         
         self.init_ui()
         self.init_camera()
@@ -463,6 +470,15 @@ class AIScaleMainWindow(QMainWindow):
         camera_layout.addStretch()
         
         left_layout.addLayout(camera_layout)
+        
+        # Camera info label
+        self.camera_info_label = QLabel("Camera: Not connected")
+        self.camera_info_label.setStyleSheet("""
+            font-size: 14px;
+            color: #666;
+            padding: 8px 0;
+        """)
+        left_layout.addWidget(self.camera_info_label)
         
         # Camera display
         self.camera_label = QLabel()
@@ -640,18 +656,48 @@ class AIScaleMainWindow(QMainWindow):
             self.camera.release()
         
         try:
+            self.current_camera_index = index
             self.camera = self.camera_backend.create_capture(index)
             if self.camera:
-                # Set optimal resolution for the display
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                self.camera.set(cv2.CAP_PROP_FPS, 30)
-                self.status_bar.showMessage(f"Camera {index} connected")
+                # Get camera profile if available
+                profile = self.camera_backend.get_camera_profile(index)
+                if profile:
+                    # Set optimal resolution based on profile
+                    optimal_res = profile.get_optimal_resolution(1366)  # Target width for RK3568
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, optimal_res[0])
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, optimal_res[1])
+                    
+                    # Update status with camera model info
+                    self.status_bar.showMessage(f"{profile.name} connected")
+                    
+                    # Update camera info label
+                    sensor_info = profile.sensor
+                    max_res = profile.get_max_resolution()
+                    self.camera_info_label.setText(
+                        f"Camera: {profile.model} | "
+                        f"Sensor: {sensor_info.get('model', 'Unknown')} {sensor_info.get('size', '')} | "
+                        f"Max: {max_res[0]}×{max_res[1]} | "
+                        f"Current: {optimal_res[0]}×{optimal_res[1]}"
+                    )
+                    
+                    # Apply profile's white balance offset to current settings
+                    if hasattr(self, 'control_panel') and profile.image_processing:
+                        wb_offset = profile.image_processing.get('white_balance_offset', 0.0)
+                        self.control_panel.set_white_balance(wb_offset)
+                else:
+                    # Default settings for unknown camera
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    self.camera.set(cv2.CAP_PROP_FPS, 30)
+                    self.status_bar.showMessage(f"Camera {index} connected")
+                    self.camera_info_label.setText(f"Camera: Generic USB Camera | Current: 1280×720")
             else:
                 self.status_bar.showMessage("Failed to connect camera")
+                self.camera_info_label.setText("Camera: Not connected")
         except Exception as e:
             self.status_bar.showMessage(f"Camera error: {str(e)}")
             self.camera = None
+            self.camera_info_label.setText("Camera: Error connecting")
     
     def update_image_settings(self, settings):
         """Update image processing settings"""
@@ -666,7 +712,10 @@ class AIScaleMainWindow(QMainWindow):
         if not ret or frame is None:
             return
         
-        # Apply image processing
+        # Apply camera profile-specific processing first
+        frame = self.camera_backend.apply_profile_image_processing(frame, self.current_camera_index)
+        
+        # Apply user-adjustable image processing
         if self.current_settings:
             frame = self.image_processor.process_frame(frame, self.current_settings)
         
@@ -749,8 +798,10 @@ class AIScaleMainWindow(QMainWindow):
         except:
             pass
         
-        # Process full resolution frame
-        processed_frame = self.image_processor.process_frame(self.current_frame, self.current_settings)
+        # Process full resolution frame with camera profile processing
+        processed_frame = self.camera_backend.apply_profile_image_processing(
+            self.current_frame, self.current_camera_index)
+        processed_frame = self.image_processor.process_frame(processed_frame, self.current_settings)
         
         # Save image
         cv2.imwrite(str(filename), processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])

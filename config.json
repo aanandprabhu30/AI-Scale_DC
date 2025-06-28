@@ -22,5 +22,11 @@
   "display_settings": {
     "theme": "dark",
     "optimized_for": "rk3568_1366x768"
+  },
+  "camera_profiles": {
+    "enabled": true,
+    "auto_detect": true,
+    "default_profile": "generic",
+    "override_settings": false
   }
 }

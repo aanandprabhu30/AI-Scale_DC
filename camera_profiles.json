@@ -1,0 +1,146 @@
+{
+  "profiles": {
+    "arducam_b0196": {
+      "name": "Arducam 8MP 1080P USB Camera Module",
+      "model": "B0196",
+      "vendor_id": "0x0bda",
+      "product_id": "0x5830",
+      "sensor": {
+        "type": "CMOS",
+        "model": "IMX219",
+        "size": "1/4\"",
+        "pixel_size": "1.12μm",
+        "max_resolution": {
+          "width": 3280,
+          "height": 2464
+        }
+      },
+      "supported_resolutions": [
+        {"width": 3280, "height": 2464, "fps": 15, "name": "8MP"},
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
+        {"width": 1640, "height": 1232, "fps": 30, "name": "1640x1232"},
+        {"width": 1280, "height": 720, "fps": 60, "name": "720p"},
+        {"width": 640, "height": 480, "fps": 90, "name": "VGA"}
+      ],
+      "optimal_settings": {
+        "brightness": 0,
+        "contrast": 32,
+        "saturation": 50,
+        "sharpness": 3,
+        "exposure": "auto",
+        "white_balance": "auto",
+        "gain": "auto",
+        "format": "MJPG"
+      },
+      "image_processing": {
+        "needs_color_correction": true,
+        "white_balance_offset": 0.5,
+        "gamma_correction": 1.1,
+        "denoise_strength": 0.3
+      },
+      "features": [
+        "Fixed focus lens",
+        "No IR filter",
+        "Wide dynamic range",
+        "Low light sensitivity"
+      ]
+    },
+    "jsk_s8130_v3": {
+      "name": "JSK-S8130-V3.0 Camera Module",
+      "model": "JSK-S8130-V3.0",
+      "vendor_id": "0x1bcf",
+      "product_id": "0x2c99",
+      "sensor": {
+        "type": "CMOS",
+        "model": "OV5648",
+        "size": "1/2.5\"",
+        "pixel_size": "1.4μm",
+        "max_resolution": {
+          "width": 2592,
+          "height": 1944
+        }
+      },
+      "supported_resolutions": [
+        {"width": 2592, "height": 1944, "fps": 15, "name": "5MP"},
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
+        {"width": 1280, "height": 960, "fps": 30, "name": "960p"},
+        {"width": 1280, "height": 720, "fps": 30, "name": "720p"},
+        {"width": 640, "height": 480, "fps": 30, "name": "VGA"}
+      ],
+      "optimal_settings": {
+        "brightness": 5,
+        "contrast": 28,
+        "saturation": 60,
+        "sharpness": 5,
+        "exposure": -5,
+        "white_balance": "auto",
+        "gain": 50,
+        "format": "YUYV"
+      },
+      "image_processing": {
+        "needs_color_correction": true,
+        "white_balance_offset": -0.3,
+        "gamma_correction": 0.95,
+        "denoise_strength": 0.5
+      },
+      "features": [
+        "Auto focus",
+        "Built-in IR filter",
+        "Good color reproduction",
+        "Optimized for daylight"
+      ]
+    },
+    "generic": {
+      "name": "Generic USB Camera",
+      "model": "Unknown",
+      "vendor_id": null,
+      "product_id": null,
+      "sensor": {
+        "type": "Unknown",
+        "model": "Unknown",
+        "size": "Unknown",
+        "pixel_size": "Unknown",
+        "max_resolution": {
+          "width": 1920,
+          "height": 1080
+        }
+      },
+      "supported_resolutions": [
+        {"width": 1920, "height": 1080, "fps": 30, "name": "1080p"},
+        {"width": 1280, "height": 720, "fps": 30, "name": "720p"},
+        {"width": 640, "height": 480, "fps": 30, "name": "VGA"}
+      ],
+      "optimal_settings": {
+        "brightness": 0,
+        "contrast": 32,
+        "saturation": 50,
+        "sharpness": 3,
+        "exposure": "auto",
+        "white_balance": "auto",
+        "gain": "auto",
+        "format": "MJPG"
+      },
+      "image_processing": {
+        "needs_color_correction": false,
+        "white_balance_offset": 0.0,
+        "gamma_correction": 1.0,
+        "denoise_strength": 0.0
+      },
+      "features": []
+    }
+  },
+  "detection_methods": {
+    "linux": {
+      "command": "lsusb -v",
+      "parse_method": "usb_descriptor"
+    },
+    "windows": {
+      "command": "wmic path Win32_USBHub get DeviceID,PNPDeviceID",
+      "parse_method": "wmi"
+    },
+    "darwin": {
+      "command": "system_profiler SPUSBDataType",
+      "parse_method": "system_profiler"
+    }
+  }
+}

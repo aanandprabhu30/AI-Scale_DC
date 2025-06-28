@@ -20,7 +20,9 @@ python run_ai_scale.py
 ## 🎯 Key Features
 
 - **Real-time Image Processing**: Fixes bluish haze, brightness/contrast issues
-- **Dynamic Camera Support**: Auto-detects and switches between cameras
+- **Smart Camera Detection**: Auto-detects camera models via USB VID/PID
+- **Camera Profiles**: Optimized settings for Arducam B0196 and JSK-S8130-V3.0
+- **Adaptive Image Processing**: Camera-specific color correction and enhancement
 - **Scale Integration**: USB/RS232 scale communication with auto-detection
 - **Hardware Optimized**: RK3568-specific optimizations for 1366×768 displays
 - **Settings Persistence**: Automatic save/load of user preferences
@@ -29,8 +31,25 @@ python run_ai_scale.py
 
 - **Board**: Rockchip RK3568 (SV3c-MPOS35687B or compatible)
 - **Display**: 15.6" BOE eDP (1366×768, 6-bit color)
-- **Camera**: Arducam USB with Sony IMX219 sensor (8MP)
 - **Scale**: USB/RS232 compatible scales (auto-detected)
+
+### Supported Cameras
+
+1. **Arducam 8MP 1080P USB Camera Module (B0196)**
+   - Sensor: 1/4" CMOS IMX219
+   - Max Resolution: 3280×2464 (8MP)
+   - USB VID/PID: 0x0bda:0x5830
+   - Features: Fixed focus, no IR filter, wide dynamic range
+
+2. **JSK-S8130-V3.0 Camera Module**
+   - Sensor: 1/2.5" CMOS OV5648
+   - Max Resolution: 2592×1944 (5MP)
+   - USB VID/PID: 0x1bcf:0x2c99
+   - Features: Auto focus, built-in IR filter, optimized for daylight
+
+3. **Generic USB Cameras**
+   - Automatic fallback for any USB camera
+   - Standard resolution support up to 1080p
 
 ## 🛠️ Installation
 

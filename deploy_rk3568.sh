@@ -47,6 +47,26 @@ else
     echo "⚠️  v4l2-utils not installed, cannot check cameras"
 fi
 
+# Check for specific camera models
+echo "🔍 Checking for supported camera models..."
+if command -v lsusb &> /dev/null; then
+    # Check for Arducam B0196
+    if lsusb | grep -q "0bda:5830"; then
+        echo "✅ Detected: Arducam 8MP 1080P USB Camera Module (B0196)"
+        echo "   - Sensor: IMX219 (3280×2464)"
+        echo "   - Applying optimized settings"
+    fi
+    
+    # Check for JSK-S8130-V3.0
+    if lsusb | grep -q "1bcf:2c99"; then
+        echo "✅ Detected: JSK-S8130-V3.0 Camera Module"
+        echo "   - Sensor: OV5648 (2592×1944)"
+        echo "   - Applying optimized settings"
+    fi
+else
+    echo "⚠️  lsusb not available, cannot detect specific camera models"
+fi
+
 # Create data directory
 echo "📁 Creating data directories..."
 mkdir -p data/captures
@@ -88,14 +108,14 @@ echo ""
 echo "✅ Deployment complete!"
 echo ""
 echo "🎯 Next steps:"
-echo "1. Connect your Arducam USB camera"
+echo "1. Connect your USB camera"
 echo "2. Run: python3 run_ai_scale.py"
 echo "3. Test camera detection and image capture"
 echo ""
 echo "📋 Hardware checklist:"
 echo "   ✅ RK3568 board (ARM64)"
 echo "   ✅ 1366×768 display"
-echo "   ✅ Arducam USB camera (IMX219)"
+echo "   ✅ USB camera (Arducam B0196 or JSK-S8130-V3.0)"
 echo "   ✅ USB scale (optional)"
 echo ""
 echo "🔧 Troubleshooting:"
