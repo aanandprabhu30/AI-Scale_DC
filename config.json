@@ -38,15 +38,15 @@
       "vendor_id": "0x0bda",
       "product_id": "0x5830",
       "sensor": "IMX219 1/4\" CMOS",
-      "max_resolution": "3280×2464"
+      "max_resolution": "3280\u00d72464"
     },
     "jsk_s8130_v3": {
-      "name": "JSK-S8130-V3.0 Camera Module", 
+      "name": "JSK-S8130-V3.0 Camera Module",
       "model": "JSK-S8130-V3.0",
       "vendor_id": "0x1bcf",
       "product_id": "0x2c99",
       "sensor": "OV5648 1/2.5\" CMOS",
-      "max_resolution": "2592×1944"
+      "max_resolution": "2592\u00d71944"
     }
   }
 }

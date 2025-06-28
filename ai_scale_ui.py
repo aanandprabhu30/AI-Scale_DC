@@ -62,9 +62,9 @@ class ImageProcessor:
     """Advanced image processing for color correction and enhancement"""
     
     def __init__(self):
-        # Dramatic CLAHE for visible effect
-        self.clahe_bgr = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
-        self.clahe_lab = cv2.createCLAHE(clipLimit=8.0, tileGridSize=(8,8))
+        # Natural CLAHE for visually pleasing local contrast
+        self.clahe_bgr = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        self.clahe_lab = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     
     def apply_white_balance(self, image: np.ndarray, temp_offset: float = 0.0) -> np.ndarray:
         """Apply white balance correction to reduce bluish haze"""
@@ -125,7 +125,7 @@ class ImageProcessor:
         return cv2.LUT(image, table)
     
     def apply_clahe(self, image: np.ndarray, channel: str = 'lab') -> np.ndarray:
-        """Apply CLAHE for local contrast enhancement"""
+        print("apply_clahe called")
         if image is None or image.size == 0:
             return image
             
@@ -155,6 +155,8 @@ class ImageProcessor:
         if image is None or image.size == 0:
             return image
         
+        print("process_frame settings:", settings)
+        
         result = image.copy()
         
         # White balance correction (reduces bluish haze)
@@ -179,6 +181,7 @@ class ImageProcessor:
         
         # CLAHE for local contrast
         if settings.get('clahe_enabled', False):
+            print("CLAHE ENABLED - applying CLAHE")
             result = self.apply_clahe(result, 'lab')
         
         return result
@@ -383,8 +386,10 @@ class CameraControlWidget(QWidget):
             self.clahe_checkbox.setChecked(settings_dict['clahe_enabled'])
     
     def get_settings(self):
-        """Get current settings dictionary"""
-        return self.settings.copy()
+        """Get current settings dictionary, always reflecting the UI state."""
+        settings = self.settings.copy()
+        settings['clahe_enabled'] = self.clahe_checkbox.isChecked()
+        return settings
     
     def set_white_balance(self, value):
         """Set white balance value programmatically"""
@@ -709,7 +714,8 @@ class AIScaleMainWindow(QMainWindow):
     
     def update_image_settings(self, settings):
         """Update image processing settings"""
-        self.current_settings = settings
+        self.current_settings = self.control_panel.get_settings()
+        self.update_frame()
     
     def update_frame(self):
         """Update camera frame"""
