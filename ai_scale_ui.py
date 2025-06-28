@@ -71,6 +71,7 @@ except ImportError:
         def get_reading(self):
             return None
 
+DEBUG = False
 
 class ImageProcessor:
     """Advanced image processing for color correction and enhancement"""
@@ -139,51 +140,53 @@ class ImageProcessor:
     
     def apply_clahe(self, image: np.ndarray, channel: str = 'lab') -> np.ndarray:
         if DEBUG:
-            print("[DEBUG] apply_clahe called - TEST: inverting image for pipeline check")
-        # Dramatic test effect: invert image to confirm pipeline
-        return cv2.bitwise_not(image)
-        # The real CLAHE code should be restored here after testing
-        # if image is None or image.size == 0:
-        #     return image
-        # if channel == 'lab':
-        #     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        #     l, a, b = cv2.split(lab)
-        #     l_clahe = self.clahe_lab.apply(l)
-        #     enhanced = cv2.merge([l_clahe, a, b])
-        #     lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-        #     b, g, r = cv2.split(lab2bgr)
-        #     b = self.clahe_bgr.apply(b)
-        #     g = self.clahe_bgr.apply(g)
-        #     r = self.clahe_bgr.apply(r)
-        #     return cv2.merge([b, g, r])
-        # else:
-        #     b, g, r = cv2.split(image)
-        #     b_clahe = self.clahe_bgr.apply(b)
-        #     g_clahe = self.clahe_bgr.apply(g)
-        #     r_clahe = self.clahe_bgr.apply(r)
-        #     return cv2.merge([b_clahe, g_clahe, r_clahe])
+            print("apply_clahe called")
+        if image is None or image.size == 0:
+            return image
+        if channel == 'lab':
+            # Apply to L channel in LAB space
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l_clahe = self.clahe_lab.apply(l)
+            enhanced = cv2.merge([l_clahe, a, b])
+            lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+            # Also apply to BGR for extra drama
+            b, g, r = cv2.split(lab2bgr)
+            b = self.clahe_bgr.apply(b)
+            g = self.clahe_bgr.apply(g)
+            r = self.clahe_bgr.apply(r)
+            return cv2.merge([b, g, r])
+        else:
+            # Apply to each BGR channel
+            b, g, r = cv2.split(image)
+            b_clahe = self.clahe_bgr.apply(b)
+            g_clahe = self.clahe_bgr.apply(g)
+            r_clahe = self.clahe_bgr.apply(r)
+            return cv2.merge([b_clahe, g_clahe, r_clahe])
     
     def process_frame(self, image: np.ndarray, settings: Dict[str, float]) -> np.ndarray:
         if DEBUG:
             print(f"[DEBUG] process_frame called with clahe_enabled={settings.get('clahe_enabled', False)}")
+            print("process_frame settings:", settings)
         if image is None or image.size == 0:
             return image
         result = image.copy()
         # White balance correction (reduces bluish haze)
         if settings.get('white_balance', 0.0) != 0.0:
             result = self.apply_white_balance(result, settings['white_balance'])
-        # Brightness and contrast (OpenCV: alpha=contrast, beta=brightness)
+        # Brightness and contrast (midpoint-shift for photo editor effect)
         brightness_norm = settings.get('brightness', 0.0)  # -1.0 to +1.0
-        brightness = int(brightness_norm * 100)  # -100 to +100 for OpenCV beta
-        contrast = settings.get('contrast', 1.0)  # 0.0 to 2.0 for OpenCV alpha
+        brightness = int(brightness_norm * 100)            # -100 to +100 for OpenCV
+        contrast = settings.get('contrast', 1.0)           # 0.1 to 2.0 for OpenCV
         contrast = max(contrast, 0.01)  # Prevent black screen at zero contrast
+        mid = 128
         if brightness != 0 or contrast != 1.0:
-            # Midpoint-shift contrast for more intuitive effect
-            gray = np.full(result.shape, 128, result.dtype)
-            result = cv2.addWeighted(result, contrast, gray, 1 - contrast, brightness)
-        # Gamma correction
-        if settings.get('gamma', 1.0) != 1.0:
-            result = self.apply_gamma_correction(result, settings['gamma'])
+            result = cv2.addWeighted(result, contrast, np.full(result.shape, mid, result.dtype), 1 - contrast, brightness)
+        # Gamma correction (with safety check)
+        gamma = settings.get('gamma', 1.0)
+        gamma = max(gamma, 0.01)  # Prevent black screen at zero gamma
+        if gamma != 1.0:
+            result = self.apply_gamma_correction(result, gamma)
         # Color enhancement
         if settings.get('saturation', 1.0) != 1.0 or settings.get('vibrance', 0.0) != 0.0:
             result = self.enhance_colors(result, 
@@ -192,7 +195,7 @@ class ImageProcessor:
         # CLAHE for local contrast
         if settings.get('clahe_enabled', False):
             if DEBUG:
-                print("[DEBUG] CLAHE branch entered in process_frame")
+                print("CLAHE ENABLED - applying CLAHE")
             result = self.apply_clahe(result, 'lab')
         return result
 
@@ -233,21 +236,21 @@ class CameraControlWidget(QWidget):
         enhance_layout.addWidget(self.brightness_slider, 0, 1)
         enhance_layout.addWidget(self.brightness_label, 0, 2)
         
-        # Contrast (0% to 200%)
+        # Contrast (10% to 200%)
         enhance_layout.addWidget(QLabel("Contrast:"), 1, 0)
         self.contrast_slider = QSlider(Qt.Horizontal)
-        self.contrast_slider.setRange(0, 200)
-        self.contrast_slider.setValue(100)
+        self.contrast_slider.setRange(10, 200)  # 10% to 200%
+        self.contrast_slider.setValue(100)  # Default to 1.0
         self.contrast_slider.valueChanged.connect(self.update_contrast)
         self.contrast_label = QLabel("100%")
         enhance_layout.addWidget(self.contrast_slider, 1, 1)
         enhance_layout.addWidget(self.contrast_label, 1, 2)
         
-        # Gamma (0% to 200%)
+        # Gamma (10% to 200%)
         enhance_layout.addWidget(QLabel("Gamma:"), 2, 0)
         self.gamma_slider = QSlider(Qt.Horizontal)
-        self.gamma_slider.setRange(0, 200)
-        self.gamma_slider.setValue(100)
+        self.gamma_slider.setRange(10, 200)  # 10% to 200%
+        self.gamma_slider.setValue(100)  # Default to 1.0
         self.gamma_slider.valueChanged.connect(self.update_gamma)
         self.gamma_label = QLabel("100%")
         enhance_layout.addWidget(self.gamma_slider, 2, 1)
@@ -404,6 +407,7 @@ class CameraControlWidget(QWidget):
             self.clahe_checkbox.setChecked(settings_dict['clahe_enabled'])
     
     def get_settings(self):
+        """Get current settings dictionary, always reflecting the UI state."""
         settings = self.settings.copy()
         settings['clahe_enabled'] = self.clahe_checkbox.isChecked()
         return settings
@@ -728,9 +732,9 @@ class AIScaleMainWindow(QMainWindow):
             self.camera_info_label.setText("Camera: Error connecting")
     
     def update_image_settings(self, settings):
-        if DEBUG:
-            print(f"process_frame settings: {settings}")
-        self.current_settings = settings.copy()
+        """Update image processing settings"""
+        self.current_settings = self.control_panel.get_settings()
+        self.update_frame()
     
     def update_frame(self):
         """Update camera frame"""
