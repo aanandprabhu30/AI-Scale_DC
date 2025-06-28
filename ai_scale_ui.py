@@ -125,62 +125,35 @@ class ImageProcessor:
         return cv2.LUT(image, table)
     
     def apply_clahe(self, image: np.ndarray, channel: str = 'lab') -> np.ndarray:
-        """Apply CLAHE for local contrast enhancement"""
-        if image is None or image.size == 0:
-            return image
-            
-        if channel == 'lab':
-            # Apply to L channel in LAB space
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            l_clahe = self.clahe_lab.apply(l)
-            enhanced = cv2.merge([l_clahe, a, b])
-            lab2bgr = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-            # Also apply to BGR for extra drama
-            b, g, r = cv2.split(lab2bgr)
-            b = self.clahe_bgr.apply(b)
-            g = self.clahe_bgr.apply(g)
-            r = self.clahe_bgr.apply(r)
-            return cv2.merge([b, g, r])
-        else:
-            # Apply to each BGR channel
-            b, g, r = cv2.split(image)
-            b_clahe = self.clahe_bgr.apply(b)
-            g_clahe = self.clahe_bgr.apply(g)
-            r_clahe = self.clahe_bgr.apply(r)
-            return cv2.merge([b_clahe, g_clahe, r_clahe])
+        print("[DEBUG] apply_clahe called - TEST: inverting image for pipeline check")
+        # Dramatic test effect: invert image to confirm pipeline
+        return cv2.bitwise_not(image)
     
     def process_frame(self, image: np.ndarray, settings: Dict[str, float]) -> np.ndarray:
-        """Apply all processing steps based on settings"""
+        print(f"[DEBUG] process_frame called with clahe_enabled={settings.get('clahe_enabled', False)}")
         if image is None or image.size == 0:
             return image
-        
         result = image.copy()
-        
         # White balance correction (reduces bluish haze)
         if settings.get('white_balance', 0.0) != 0.0:
             result = self.apply_white_balance(result, settings['white_balance'])
-        
         # Brightness and contrast
         if settings.get('brightness', 0.0) != 0.0 or settings.get('contrast', 1.0) != 1.0:
             result = cv2.convertScaleAbs(result, 
                                        alpha=settings.get('contrast', 1.0),
                                        beta=settings.get('brightness', 0.0))
-        
         # Gamma correction
         if settings.get('gamma', 1.0) != 1.0:
             result = self.apply_gamma_correction(result, settings['gamma'])
-        
         # Color enhancement
         if settings.get('saturation', 1.0) != 1.0 or settings.get('vibrance', 0.0) != 0.0:
             result = self.enhance_colors(result, 
                                        settings.get('saturation', 1.0),
                                        settings.get('vibrance', 0.0))
-        
         # CLAHE for local contrast
         if settings.get('clahe_enabled', False):
+            print("[DEBUG] CLAHE branch entered in process_frame")
             result = self.apply_clahe(result, 'lab')
-        
         return result
 
 
@@ -210,33 +183,33 @@ class CameraControlWidget(QWidget):
         enhance_group = QGroupBox("Image Enhancement")
         enhance_layout = QGridLayout()
         
-        # Brightness (-50 to +50)
+        # Brightness (-100% to +100%)
         enhance_layout.addWidget(QLabel("Brightness:"), 0, 0)
         self.brightness_slider = QSlider(Qt.Horizontal)
-        self.brightness_slider.setRange(-50, 50)
+        self.brightness_slider.setRange(-100, 100)
         self.brightness_slider.setValue(0)
         self.brightness_slider.valueChanged.connect(self.update_brightness)
-        self.brightness_label = QLabel("0")
+        self.brightness_label = QLabel("0%")
         enhance_layout.addWidget(self.brightness_slider, 0, 1)
         enhance_layout.addWidget(self.brightness_label, 0, 2)
         
-        # Contrast (0.5 to 2.0)
+        # Contrast (0% to 200%)
         enhance_layout.addWidget(QLabel("Contrast:"), 1, 0)
         self.contrast_slider = QSlider(Qt.Horizontal)
-        self.contrast_slider.setRange(50, 200)
+        self.contrast_slider.setRange(0, 200)
         self.contrast_slider.setValue(100)
         self.contrast_slider.valueChanged.connect(self.update_contrast)
-        self.contrast_label = QLabel("1.0")
+        self.contrast_label = QLabel("100%")
         enhance_layout.addWidget(self.contrast_slider, 1, 1)
         enhance_layout.addWidget(self.contrast_label, 1, 2)
         
-        # Gamma (0.5 to 2.0)
+        # Gamma (0% to 200%)
         enhance_layout.addWidget(QLabel("Gamma:"), 2, 0)
         self.gamma_slider = QSlider(Qt.Horizontal)
-        self.gamma_slider.setRange(50, 200)
+        self.gamma_slider.setRange(0, 200)
         self.gamma_slider.setValue(100)
         self.gamma_slider.valueChanged.connect(self.update_gamma)
-        self.gamma_label = QLabel("1.0")
+        self.gamma_label = QLabel("100%")
         enhance_layout.addWidget(self.gamma_slider, 2, 1)
         enhance_layout.addWidget(self.gamma_label, 2, 2)
         
@@ -247,33 +220,33 @@ class CameraControlWidget(QWidget):
         color_group = QGroupBox("Color Correction")
         color_layout = QGridLayout()
         
-        # White Balance (-10 to +10)
+        # White Balance (-100% to +100%)
         color_layout.addWidget(QLabel("White Balance:"), 0, 0)
         self.wb_slider = QSlider(Qt.Horizontal)
         self.wb_slider.setRange(-100, 100)
         self.wb_slider.setValue(0)
         self.wb_slider.valueChanged.connect(self.update_white_balance)
-        self.wb_label = QLabel("0")
+        self.wb_label = QLabel("0%")
         color_layout.addWidget(self.wb_slider, 0, 1)
         color_layout.addWidget(self.wb_label, 0, 2)
         
-        # Saturation (0.5 to 2.0)
+        # Saturation (0% to 200%)
         color_layout.addWidget(QLabel("Saturation:"), 1, 0)
         self.saturation_slider = QSlider(Qt.Horizontal)
-        self.saturation_slider.setRange(50, 200)
+        self.saturation_slider.setRange(0, 200)
         self.saturation_slider.setValue(100)
         self.saturation_slider.valueChanged.connect(self.update_saturation)
-        self.saturation_label = QLabel("1.0")
+        self.saturation_label = QLabel("100%")
         color_layout.addWidget(self.saturation_slider, 1, 1)
         color_layout.addWidget(self.saturation_label, 1, 2)
         
-        # Vibrance (0 to 1.0)
+        # Vibrance (0% to 100%)
         color_layout.addWidget(QLabel("Vibrance:"), 2, 0)
         self.vibrance_slider = QSlider(Qt.Horizontal)
         self.vibrance_slider.setRange(0, 100)
         self.vibrance_slider.setValue(0)
         self.vibrance_slider.valueChanged.connect(self.update_vibrance)
-        self.vibrance_label = QLabel("0.0")
+        self.vibrance_label = QLabel("0%")
         color_layout.addWidget(self.vibrance_slider, 2, 1)
         color_layout.addWidget(self.vibrance_label, 2, 2)
         
@@ -310,43 +283,50 @@ class CameraControlWidget(QWidget):
         self.setLayout(layout)
     
     def update_brightness(self, value):
-        self.settings['brightness'] = float(value)
-        self.brightness_label.setText(str(value))
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['brightness'] = norm
+        self.brightness_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_contrast(self, value):
-        self.settings['contrast'] = value / 100.0
-        self.contrast_label.setText(f"{value/100.0:.1f}")
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['contrast'] = norm
+        self.contrast_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_gamma(self, value):
-        self.settings['gamma'] = value / 100.0
-        self.gamma_label.setText(f"{value/100.0:.1f}")
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['gamma'] = norm
+        self.gamma_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_white_balance(self, value):
-        self.settings['white_balance'] = value / 10.0
-        self.wb_label.setText(f"{value/10.0:.1f}")
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['white_balance'] = norm
+        self.wb_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_saturation(self, value):
-        self.settings['saturation'] = value / 100.0
-        self.saturation_label.setText(f"{value/100.0:.1f}")
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['saturation'] = norm
+        self.saturation_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_vibrance(self, value):
-        self.settings['vibrance'] = value / 100.0
-        self.vibrance_label.setText(f"{value/100.0:.1f}")
-        self.settings_changed.emit(self.settings)
+        norm = value / 100.0
+        self.settings['vibrance'] = norm
+        self.vibrance_label.setText(f"{value}%")
+        self.settings_changed.emit(self.get_settings())
     
     def update_clahe(self, state):
+        print(f"[DEBUG] update_clahe called with state={state}")
         self.settings['clahe_enabled'] = state == Qt.Checked
         # Show or hide CLAHE ON label
         if self.settings['clahe_enabled']:
             self.clahe_on_label.show()
         else:
             self.clahe_on_label.hide()
-        self.settings_changed.emit(self.settings)
+        self.settings_changed.emit(self.get_settings())
     
     def reset_settings(self):
         """Reset all settings to defaults"""
@@ -368,13 +348,13 @@ class CameraControlWidget(QWidget):
         
         # Update UI controls
         if 'brightness' in settings_dict:
-            self.brightness_slider.setValue(int(settings_dict['brightness']))
+            self.brightness_slider.setValue(int(settings_dict['brightness'] * 100))
         if 'contrast' in settings_dict:
             self.contrast_slider.setValue(int(settings_dict['contrast'] * 100))
         if 'gamma' in settings_dict:
             self.gamma_slider.setValue(int(settings_dict['gamma'] * 100))
         if 'white_balance' in settings_dict:
-            self.wb_slider.setValue(int(settings_dict['white_balance'] * 10))
+            self.wb_slider.setValue(int(settings_dict['white_balance'] * 100))
         if 'saturation' in settings_dict:
             self.saturation_slider.setValue(int(settings_dict['saturation'] * 100))
         if 'vibrance' in settings_dict:
@@ -383,14 +363,15 @@ class CameraControlWidget(QWidget):
             self.clahe_checkbox.setChecked(settings_dict['clahe_enabled'])
     
     def get_settings(self):
-        """Get current settings dictionary"""
-        return self.settings.copy()
+        settings = self.settings.copy()
+        settings['clahe_enabled'] = self.clahe_checkbox.isChecked()
+        return settings
     
     def set_white_balance(self, value):
         """Set white balance value programmatically"""
-        self.wb_slider.setValue(int(value * 10))
+        self.wb_slider.setValue(int(value * 100))
         self.settings['white_balance'] = value
-        self.settings_changed.emit(self.settings)
+        self.settings_changed.emit(self.get_settings())
 
 
 class AIScaleMainWindow(QMainWindow):
@@ -700,30 +681,25 @@ class AIScaleMainWindow(QMainWindow):
             self.camera_info_label.setText("Camera: Error connecting")
     
     def update_image_settings(self, settings):
-        """Update image processing settings"""
-        self.current_settings = settings
+        print(f"process_frame settings: {settings}")
+        self.current_settings = settings.copy()  # Fix: always copy to avoid reference issues
     
     def update_frame(self):
         """Update camera frame"""
         if not self.camera:
             return
-        
         ret, frame = self.camera.read()
         if not ret or frame is None:
             return
-        
         # Apply camera profile-specific processing first
         frame = self.camera_backend.apply_profile_image_processing(frame, self.current_camera_index)
-        
-        # Apply user-adjustable image processing
-        if self.current_settings:
-            frame = self.image_processor.process_frame(frame, self.current_settings)
-        
+        # Always fetch the latest settings from the control panel
+        settings = self.control_panel.get_settings()
+        print(f"[DEBUG] update_frame using settings: {settings}")
+        frame = self.image_processor.process_frame(frame, settings)
         self.current_frame = frame
-        
         # Convert to Qt format and display
         self.display_frame(frame)
-        
         # Update scale reading
         self.update_scale_reading()
     
